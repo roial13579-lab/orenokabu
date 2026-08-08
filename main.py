@@ -26,22 +26,19 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定項目 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 日米監視銘柄リスト
+# 監視銘柄リスト（日本株・米国株）
 WATCH_LIST = {
-    # 日本株
     "8035.T": "東京エレクトロン",
     "7011.T": "三菱重工",
     "7203.T": "トヨタ自動車",
     "8306.T": "三菱UFJ",
     "9984.T": "ソフトバンクG",
-    # 米国株
     "NVDA": "エヌビディア (US)",
     "AAPL": "アップル (US)",
     "MSFT": "マイクロソフト (US)",
     "TSLA": "テスラ (US)"
 }
 
-target_channel_id = None
 seen_disclosures = set()
 
 # --- ボタンUI定義 ---
@@ -55,11 +52,11 @@ class SimpleBoardView(View):
         
         report = f"**【日米注目株 リアルタイム売買勢い】**\n\n"
         
-        # ランダムで4社ピックアップして見やすく表示
+        # 4社ランダムピックアップ
         sample_keys = random.sample(list(WATCH_LIST.keys()), 4)
         for code in sample_keys:
             name = WATCH_LIST[code]
-            buy_pct = random.randint(30, 85)  # 買い割合(30%~85%)
+            buy_pct = random.randint(30, 85)
             
             green_bars = round(buy_pct / 20)
             red_bars = 5 - green_bars
@@ -84,13 +81,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- TDnet（適時開示）常時監視タスク ---
+# --- TDnet常時監視タスク ---
 @tasks.loop(minutes=3)
 def check_tdnet():
-    global target_channel_id
-    if not target_channel_id:
-        return
-
     url = "https://www.release.tdnet.info/inbs/I_main_00.html"
     try:
         res = requests.get(url, timeout=10)
@@ -111,35 +104,43 @@ def check_tdnet():
                     if item_id not in seen_disclosures:
                         seen_disclosures.add(item_id)
                         
-                        channel = bot.get_channel(target_channel_id)
-                        if channel:
-                            embed = discord.Embed(
-                                title=f"🚨 【好材料・イベント検知】{company} ({code})",
-                                description=f"**{title}**\n\n[📄 開示資料を見る](https://www.release.tdnet.info/inbs/I_main_00.html)",
-                                color=0x00ff00
-                            )
-                            bot.loop.create_task(channel.send(embed=embed))
+                        # 参加中の全テキストチャンネルに送信
+                        for guild in bot.guilds:
+                            for channel in guild.text_channels:
+                                if channel.permissions_for(guild.me).send_messages:
+                                    embed = discord.Embed(
+                                        title=f"🚨 【好材料・イベント検知】{company} ({code})",
+                                        description=f"**{title}**\n\n[📄 開示資料を見る](https://www.release.tdnet.info/inbs/I_main_00.html)",
+                                        color=0x00ff00
+                                    )
+                                    bot.loop.create_task(channel.send(embed=embed))
+                                    break
     except Exception as e:
         print(f"TDnet Check Error: {e}")
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
+    
+    # 永続ボタンの登録（Bot再起動後もボタンが効くようにする）
+    bot.add_view(SimpleBoardView())
+    
     if not check_tdnet.is_running():
         check_tdnet.start()
 
-# --- コマンド登録 (!k と !panel の両対応) ---
-@bot.command(name="k")
-async def k_cmd(ctx):
-    """ !k コマンド """
-    global target_channel_id
-    target_channel_id = ctx.channel.id
-    view = SimpleBoardView()
-    await ctx.send("🤖 **日米株式 イベント＆売買勢い Bot**\nボタンを押すと注目銘柄の買気配・売気配の勢いを判定します。", view=view)
+# メッセージ受信時の手動処理（!k でも !panel でも反応させる）
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
 
-@bot.command(name="panel")
-async def panel_cmd(ctx):
-    """ !panel コマンド（別名エイリアス） """
-    await k_cmd(ctx)
+    # コマンド判定（!k や !panel など）
+    text = message.content.strip()
+    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
+        view = SimpleBoardView()
+        await message.channel.send("🤖 **日米株式 イベント＆売買勢い Bot**\n以下のボタンを押すと注目銘柄の売買勢いを判定します。", view=view)
+        return
+
+    await bot.process_commands(message)
 
 bot.run(TOKEN)
