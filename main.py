@@ -7,7 +7,7 @@ from discord.ext import commands
 from discord.ui import Button, View
 
 # Step 1で取得したBotのトークンをここに貼り付けます
-TOKEN = "ここに取得したBOTトークンを貼り付け"
+TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
 WATCH_LIST = {
     "7203": "トヨタ自動車",
