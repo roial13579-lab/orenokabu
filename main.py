@@ -10,7 +10,7 @@ from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
 
-# --- ダミーWebサーバー (HEAD/GET完全対応) ---
+# --- ダミーWebサーバー ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -31,21 +31,19 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 📌 常設パネルのチャンネルID（0のままでも書き込めるチャンネルに自動設定されます）
+# 📌 チャンネルID（※特定のチャンネルに固定したい場合はそのIDを入力。0のままでも発言のあったチャンネルの最下部に常設されます）
 PANEL_CHANNEL_ID = 1535613064056152247
-
-# 💡 キー（番号）を完全に重複しない形にして上書きを防止
 SECTORS = {
-    "1. 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
-    "2. 重工・防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
-    "3. 自動車・輸送": ["7203.T", "7267.T", "7270.T", "7201.T", "TSLA"],
-    "4. 大型金融": ["8306.T", "8316.T", "8411.T", "8604.T", "8766.T"],
-    "5. 資源・エネルギー": ["1605.T", "5020.T", "5401.T", "4063.T", "XOM"],
-    "6. 海運・物流": ["9101.T", "9104.T", "9107.T", "9020.T", "9143.T"],
-    "7. IT・メガテック": ["9984.T", "9432.T", "AAPL", "MSFT", "GOOGL"],
-    "8. 商社・流通": ["8058.T", "8001.T", "8031.T", "8053.T", "3382.T"],
-    "9. 医薬品・バイオ": ["4502.T", "4519.T", "4568.T", "4503.T", "LLY"],
-    "10. 電気・精密機器": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
+    "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
+    "2.重工防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
+    "3.自動車": ["7203.T", "7267.T", "7270.T", "7201.T", "TSLA"],
+    "4.大型金融": ["8306.T", "8316.T", "8411.T", "8604.T", "8766.T"],
+    "5.エネ資源": ["1605.T", "5020.T", "5401.T", "4063.T", "XOM"],
+    "6.海運物流": ["9101.T", "9104.T", "9107.T", "9020.T", "9143.T"],
+    "7.メガテック": ["9984.T", "9432.T", "AAPL", "MSFT", "GOOGL"],
+    "8.商社流通": ["8058.T", "8001.T", "8031.T", "8053.T", "3382.T"],
+    "9.医薬バイオ": ["4502.T", "4519.T", "4568.T", "4503.T", "LLY"],
+    "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
 seen_disclosures = set()
@@ -102,27 +100,26 @@ class InstitutionalBoardView(View):
         
         tech_data = fetch_all_technical_data()
         
-        sector_blocks = []
+        full_report = "📊 **【主要10セクター 資金流入力学リアルタイム解析】**\n\n"
+        
         for sector_name, tickers in SECTORS.items():
-            block = f"**【{sector_name}】**\n"
+            full_report += f"**🔹 {sector_name}**\n"
+            line_items = []
             for code in tickers:
                 tech = tech_data.get(code)
+                clean_code = code.replace('.T','')
                 if tech:
                     score = min(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 100)
-                    bars = round(score / 20)
-                    meter = "🟩" * bars + "🟥" * (5 - bars)
-                    status = "🔥資金流入" if score >= 65 else ("⚡売買拮抗" if score >= 45 else "🔻資金流出")
-                    block += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
+                    status = "🔥" if score >= 65 else ("⚡" if score >= 45 else "🔻")
+                    line_items.append(f"`{clean_code}`:{status}{score}")
                 else:
-                    block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
-            sector_blocks.append(block)
+                    line_items.append(f"`{clean_code}`:--")
+            
+            full_report += "> " + " | ".join(line_items) + "\n\n"
 
-        # 💡 3セクターずつ分割して連投（全10セクター分を完走させる）
-        chunk_size = 3
-        for i in range(0, len(sector_blocks), chunk_size):
-            chunk = sector_blocks[i:i + chunk_size]
-            msg_text = "\n\n".join(chunk)
-            await interaction.followup.send(msg_text)
+        # 解析結果を送信したあと、常設パネルを一番下に再配置
+        await interaction.followup.send(full_report)
+        await send_or_move_panel(interaction.channel)
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
@@ -139,47 +136,51 @@ class InstitutionalBoardView(View):
         
         if found_count == 0:
             report += "現在、売られ過ぎ水準（RSI 35%以下）に達している絶好の押し目対象銘柄はありません。"
+        
         await interaction.followup.send(report)
+        await send_or_move_panel(interaction.channel)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-async def setup_permanent_panel():
+# 💡 パネルを削除して常にメッセージの最下部に移動させる共通関数
+async def send_or_move_panel(channel):
+    if not channel:
+        return
     try:
-        target_channel = None
-        if PANEL_CHANNEL_ID != 0:
-            target_channel = bot.get_channel(PANEL_CHANNEL_ID)
-            
-        if not target_channel:
-            for guild in bot.guilds:
-                for channel in guild.text_channels:
-                    perms = channel.permissions_for(guild.me)
-                    if perms.send_messages and perms.read_message_history:
-                        target_channel = channel
-                        break
-                if target_channel:
+        # 古いパネルメッセージを削除
+        async for msg in channel.history(limit=15):
+            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
+                await msg.delete()
+    except Exception:
+        pass
+
+    # 最下部に新しいパネルを送信
+    view = InstitutionalBoardView()
+    await channel.send(
+        "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
+        "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。",
+        view=view
+    )
+
+async def setup_permanent_panel():
+    target_channel = None
+    if PANEL_CHANNEL_ID != 0:
+        target_channel = bot.get_channel(PANEL_CHANNEL_ID)
+        
+    if not target_channel:
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                perms = channel.permissions_for(guild.me)
+                if perms.send_messages and perms.read_message_history:
+                    target_channel = channel
                     break
+            if target_channel:
+                break
 
-        if not target_channel:
-            return
-
-        try:
-            async for msg in target_channel.history(limit=10):
-                if msg.author == bot.user and "常設ダッシュボード" in msg.content:
-                    await msg.delete()
-        except Exception:
-            pass
-
-        view = InstitutionalBoardView()
-        await target_channel.send(
-            "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
-            "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。",
-            view=view
-        )
-        print(f"✅ 常設パネルを #{target_channel.name} に設置完了。")
-    except Exception as e:
-        print(f"Panel setup error: {e}")
+    if target_channel:
+        await send_or_move_panel(target_channel)
 
 @bot.event
 async def on_ready():
@@ -191,11 +192,12 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot:
         return
+
     text = message.content.strip()
     if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
-        view = InstitutionalBoardView()
-        await message.channel.send("🤖 **株式機関投資分析・イベント予測 Bot**\nボタンを選択してください。", view=view)
+        await send_or_move_panel(message.channel)
         return
+
     await bot.process_commands(message)
 
 bot.run(TOKEN)
