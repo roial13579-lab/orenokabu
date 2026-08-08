@@ -8,7 +8,6 @@ from discord.ui import Button, View
 
 # Step 1で取得したBotのトークンをここに貼り付けます
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
-
 WATCH_LIST = {
     "7203": "トヨタ自動車",
     "8035": "東京エレクトロン",
