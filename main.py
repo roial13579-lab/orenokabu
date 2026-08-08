@@ -10,12 +10,16 @@ from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
 
-# --- ダミーWebサーバー (Renderポート監視対策) ---
+# --- ダミーWebサーバー (Renderポート監視対策・HEAD対応) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -30,7 +34,7 @@ TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ
 # 📌 常設パネルを設置したいチャンネルID（0のままでも書き込めるチャンネルに自動常設されます）
 PANEL_CHANNEL_ID = 0
 
-# 主要10セクター 各5社（計50銘柄）※絵文字の重複を完全に排除
+# 主要10セクター 各5社（計50銘柄）
 SECTORS = {
     "🔹1. 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
     "🔹2. 重工・防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
@@ -111,7 +115,6 @@ class InstitutionalBoardView(View):
         
         tech_data = fetch_all_technical_data()
         
-        # 各セクターの解析テキストを作成
         sector_blocks = []
         for sector_name, tickers in SECTORS.items():
             block = f"**{sector_name}**\n"
@@ -127,7 +130,6 @@ class InstitutionalBoardView(View):
                     block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
             sector_blocks.append(block)
 
-        # 💡 3セクター（15銘柄）ずつ分割して順番に全て送信（全10セクター分送信）
         chunk_size = 3
         for i in range(0, len(sector_blocks), chunk_size):
             chunk = sector_blocks[i:i + chunk_size]
@@ -201,11 +203,9 @@ async def setup_permanent_panel():
     try:
         target_channel = None
         
-        # 1. 指定されたIDのチャンネルを探す
         if PANEL_CHANNEL_ID != 0:
             target_channel = bot.get_channel(PANEL_CHANNEL_ID)
             
-        # 2. 見つからない場合は、書き込み権限のある最初のチャンネルを自動取得
         if not target_channel:
             for guild in bot.guilds:
                 for channel in guild.text_channels:
@@ -219,12 +219,10 @@ async def setup_permanent_panel():
             print("送信可能なチャンネルが見つかりませんでした。")
             return
 
-        # 古い自動投稿パネルがあれば削除
         async for msg in target_channel.history(limit=10):
             if msg.author == bot.user and "常設ダッシュボード" in msg.content:
                 await msg.delete()
 
-        # 新規常設パネルを送信
         view = InstitutionalBoardView()
         await target_channel.send(
             "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
@@ -238,8 +236,8 @@ async def setup_permanent_panel():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
-    bot.add_view(InstitutionalBoardView())  # 再起動してもボタンを有効化
-    await setup_permanent_panel()           # 起動時に自動でチャンネルへ常設
+    bot.add_view(InstitutionalBoardView())
+    await setup_permanent_panel()
     
     if not check_tdnet.is_running():
         check_tdnet.start()
