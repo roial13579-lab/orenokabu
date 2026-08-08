@@ -1,4 +1,17 @@
-import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_dummy_server():
+    server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_dummy_server, daemon=True).start()import os
 import datetime
 import requests
 import random
@@ -67,3 +80,17 @@ async def panel(ctx):
     await ctx.send("下部ボタンを押すと、いつでもリアルタイムの板情報を精査・取得します 📊", view=view)
 
 bot.run(TOKEN)
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_dummy_server():
+    server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+threading.Thread(target=run_dummy_server, daemon=True).start()
