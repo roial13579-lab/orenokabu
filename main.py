@@ -10,7 +10,7 @@ from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
 
-# --- ダミーWebサーバー ---
+# --- ダミーWebサーバー (HEAD/GET完全対応) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -31,8 +31,8 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 📌 チャンネルID（※特定のチャンネルに固定したい場合はそのIDを入力。0のままでも発言のあったチャンネルの最下部に常設されます）
-PANEL_CHANNEL_ID = 1535613064056152247
+PANEL_CHANNEL_ID = 0
+
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
     "2.重工防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
@@ -46,49 +46,50 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-seen_disclosures = set()
-
 def fetch_all_technical_data():
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
+    results = {}
     try:
-        data = yf.download(all_tickers, period="3mo", interval="1d", progress=False)
-        results = {}
+        data = yf.download(all_tickers, period="1mo", interval="1d", progress=False)
         for code in all_tickers:
             try:
-                close = data['Close'][code].dropna() if len(all_tickers) > 1 else data['Close'].dropna()
-                volume = data['Volume'][code].dropna() if len(all_tickers) > 1 else data['Volume'].dropna()
+                if len(all_tickers) > 1:
+                    close = data['Close'][code].dropna()
+                    volume = data['Volume'][code].dropna()
+                else:
+                    close = data['Close'].dropna()
+                    volume = data['Volume'].dropna()
 
-                if len(close) < 20:
+                if len(close) == 0:
                     continue
 
                 current_price = close.iloc[-1]
-                ma25 = close.rolling(window=25).mean().iloc[-1]
-                bias = ((current_price - ma25) / ma25) * 100
+                ma25 = close.mean()
+                bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
                 
                 delta = close.diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs.iloc[-1]))
+                gain = (delta.where(delta > 0, 0)).mean()
+                loss = (-delta.where(delta < 0, 0)).mean()
+                rs = gain / loss if loss != 0 else 1
+                rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
                 
-                vol_ma20 = volume.rolling(window=20).mean().iloc[-1]
-                vol_ratio = (volume.iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
+                vol_ma = volume.mean()
+                vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
 
                 is_dip = (rsi <= 35) and (bias <= -5.0)
 
                 results[code] = {
-                    "price": round(current_price, 1),
-                    "bias": round(bias, 1),
-                    "rsi": round(rsi, 1),
-                    "vol_ratio": round(vol_ratio, 2),
+                    "price": round(float(current_price), 1),
+                    "bias": round(float(bias), 1),
+                    "rsi": round(float(rsi), 1),
+                    "vol_ratio": round(float(vol_ratio), 2),
                     "is_dip": is_dip
                 }
             except Exception:
                 continue
-        return results
     except Exception as e:
-        print(f"Batch fetch error: {e}")
-        return {}
+        print(f"Fetch Error: {e}")
+    return results
 
 class InstitutionalBoardView(View):
     def __init__(self):
@@ -100,7 +101,7 @@ class InstitutionalBoardView(View):
         
         tech_data = fetch_all_technical_data()
         
-        full_report = "📊 **【主要10セクター 資金流入力学リアルタイム解析】**\n\n"
+        full_report = "📊 **【全10セクター 資金流入力学リアルタイム解析】**\n\n"
         
         for sector_name, tickers in SECTORS.items():
             full_report += f"**🔹 {sector_name}**\n"
@@ -109,15 +110,14 @@ class InstitutionalBoardView(View):
                 tech = tech_data.get(code)
                 clean_code = code.replace('.T','')
                 if tech:
-                    score = min(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 100)
-                    status = "🔥" if score >= 65 else ("⚡" if score >= 45 else "🔻")
+                    score = min(max(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 10), 100)
+                    status = "🔥" if score >= 60 else ("⚡" if score >= 40 else "🔻")
                     line_items.append(f"`{clean_code}`:{status}{score}")
                 else:
-                    line_items.append(f"`{clean_code}`:--")
+                    line_items.append(f"`{clean_code}`:取得中")
             
             full_report += "> " + " | ".join(line_items) + "\n\n"
 
-        # 解析結果を送信したあと、常設パネルを一番下に再配置
         await interaction.followup.send(full_report)
         await send_or_move_panel(interaction.channel)
 
@@ -144,19 +144,16 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 💡 パネルを削除して常にメッセージの最下部に移動させる共通関数
 async def send_or_move_panel(channel):
     if not channel:
         return
     try:
-        # 古いパネルメッセージを削除
         async for msg in channel.history(limit=15):
             if msg.author == bot.user and "常設ダッシュボード" in msg.content:
                 await msg.delete()
     except Exception:
         pass
 
-    # 最下部に新しいパネルを送信
     view = InstitutionalBoardView()
     await channel.send(
         "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
