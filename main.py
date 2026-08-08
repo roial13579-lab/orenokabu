@@ -66,20 +66,20 @@ def analyze_stock_technical(ticker_symbol):
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs.iloc[-1]))
         
-        # 出来高変化率（直近出来高 vs 20日平均出来高）
+        # 出来高変化率
         vol_ma20 = df['Volume'].rolling(window=20).mean().iloc[-1]
         vol_ratio = (df['Volume'].iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
 
         # 押し目判定（RSI 35以下かつ25日線乖離率 -5%以下）
         is_dip = (rsi <= 35) and (bias <= -5.0)
 
-        # 過去イベント時の勝率・平均騰落率の模擬解析（RSI30以下からの反発確率）
+        # 過去イベント時の復元率計算
         dip_instances = df[(df['Close'].shift(1) < df['Close'].shift(1).rolling(25).mean() * 0.95)]
         if len(dip_instances) > 0:
             win_count = sum((df.loc[dip_instances.index, 'Close'].shift(-3) > df.loc[dip_instances.index, 'Close']))
             win_rate = int((win_count / len(dip_instances)) * 100)
         else:
-            win_rate = 75  # バックテストサンプル不足時の標準過去データ推定値
+            win_rate = 75
 
         return {
             "price": round(current_price, 1),
@@ -101,25 +101,33 @@ class InstitutionalBoardView(View):
     @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        report = "📊 **【業界別（各5社）リアルタイム資金動向・買い圧力】**\n\n"
+        await interaction.followup.send("📊 **【業界別（各5社）リアルタイム資金動向・買い圧力】解析を開始します...**")
         
+        # 文字数制限対策：セクターごとに分割送信
+        current_msg = ""
         for sector_name, tickers in SECTORS.items():
-            report += f"**{sector_name}**\n"
+            sector_block = f"**{sector_name}**\n"
             for code in tickers:
                 tech = analyze_stock_technical(code)
                 if tech:
-                    # 買い圧力スコアリング (出来高 + RSI)
                     score = min(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 100)
                     bars = round(score / 20)
                     meter = "🟩" * bars + "🟥" * (5 - bars)
                     status = "🔥資金流入" if score >= 65 else ("⚡売買拮抗" if score >= 45 else "🔻資金流出")
-                    
-                    report += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
+                    sector_block += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
                 else:
-                    report += f"> `{code}`: データ取得失敗\n"
-            report += "\n"
-        
-        await interaction.followup.send(report)
+                    sector_block += f"> `{code}`: データ取得中/失敗\n"
+            sector_block += "\n"
+
+            # 1,500文字を超えそうになったら1度送信してリセット
+            if len(current_msg) + len(sector_block) > 1500:
+                await interaction.channel.send(current_msg)
+                current_msg = sector_block
+            else:
+                current_msg += sector_block
+
+        if current_msg:
+            await interaction.channel.send(current_msg)
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
@@ -147,7 +155,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- TDnet（適時開示）監視＆勝率予測付加 ---
+# --- TDnet監視 ---
 @tasks.loop(minutes=3)
 def check_tdnet():
     url = "https://www.release.tdnet.info/inbs/I_main_00.html"
@@ -156,7 +164,7 @@ def check_tdnet():
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.text, "html.parser")
         
-        keywords = ["業績予想の修正", "上方修正", "自己株式の取得", "自己株式取得", "増配", "株式分割", "TOB"]
+        keywords = ["業績予想の修正", "上方修正", "自己株式の取得", "自己株式取得", "復配", "増配", "株式分割", "TOB"]
         
         for row in soup.find_all("tr"):
             cols = row.find_all("td")
@@ -170,7 +178,6 @@ def check_tdnet():
                     if item_id not in seen_disclosures:
                         seen_disclosures.add(item_id)
                         
-                        # イベント発生時のテクニカル解析・勝率計算
                         tech = analyze_stock_technical(f"{code}.T")
                         win_str = f"{tech['win_rate']}%" if tech else "75%(過去推計)"
                         
