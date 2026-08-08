@@ -1,6 +1,5 @@
 import os
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -9,28 +8,20 @@ from discord.ext import commands, tasks
 from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
+from flask import Flask
+from waitress import serve
 
-# --- ダミーWebサーバー (HEAD/GETエラー完全解消) ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"OK")
+# --- Flask によるヘルスチェック用ダミーWebサーバー ---
+app = Flask(__name__)
 
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-
-    # ログ出力時の標準エラー出力を抑制して綺麗に保つ
-    def log_message(self, format, *args):
-        return
+@app.route('/', methods=['GET', 'HEAD', 'POST'])
+def health_check():
+    return "OK", 200
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+    # waitress でマルチスレッド配信
+    serve(app, host='0.0.0.0', port=port, _quiet=True)
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
