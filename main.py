@@ -1,6 +1,6 @@
+import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
 import datetime
 import requests
 import random
@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 from discord.ui import Button, View
 
+# --- Renderのポート監視を回避するためのダミーWebサーバー ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -15,10 +16,15 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
 def run_dummy_server():
+    # Renderが指定するPORT環境変数を取得（デフォルト10000）
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
+
+# バックグラウンドでダミーサーバーを起動
 threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# --- ここから下は既存のBotコード（TOKENやWATCH_LISTなど） ---
 
 # Step 1で取得したBotのトークンをここに貼り付けます
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
