@@ -32,7 +32,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-PANEL_CHANNEL_ID = 0
+PANEL_CHANNEL_ID = 1535613064056152247
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
