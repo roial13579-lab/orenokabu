@@ -9,9 +9,8 @@ from discord.ext import commands, tasks
 from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
-import traceback
 
-# --- ダミーWebサーバー ---
+# --- ダミーWebサーバー (HEAD/GET完全対応) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -32,20 +31,21 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 📌 常設パネルのチャンネルID（DiscordでコピーしたIDを指定すると確実です）
-PANEL_CHANNEL_ID = MTUzNTYzNjc4MzU1ODA0MTY0MAGtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4
+# 📌 常設パネルのチャンネルID（0のままでも書き込めるチャンネルに自動設定されます）
+PANEL_CHANNEL_ID = 1535613064056152247
 
+# 💡 キー（番号）を完全に重複しない形にして上書きを防止
 SECTORS = {
-    "🔹1. 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
-    "🔹2. 重工・防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
-    "🔹3. 自動車・輸送": ["7203.T", "7267.T", "7270.T", "7201.T", "TSLA"],
-    "🔹4. 大型金融": ["8306.T", "8316.T", "8411.T", "8604.T", "8766.T"],
-    "🔹5. 資源・エネルギー": ["1605.T", "5020.T", "5401.T", "4063.T", "XOM"],
-    "🔹6. 海運・物流": ["9101.T", "9104.T", "9107.T", "9020.T", "9143.T"],
-    "🔹7. IT・メガテック": ["9984.T", "9432.T", "AAPL", "MSFT", "GOOGL"],
-    "🔹8. 商社・流通": ["8058.T", "8001.T", "8031.T", "8053.T", "3382.T"],
-    "🔹9. 医薬品・バイオ": ["4502.T", "4519.T", "4568.T", "4503.T", "LLY"],
-    "🔹10. 電気・精密機器": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
+    "1. 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
+    "2. 重工・防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
+    "3. 自動車・輸送": ["7203.T", "7267.T", "7270.T", "7201.T", "TSLA"],
+    "4. 大型金融": ["8306.T", "8316.T", "8411.T", "8604.T", "8766.T"],
+    "5. 資源・エネルギー": ["1605.T", "5020.T", "5401.T", "4063.T", "XOM"],
+    "6. 海運・物流": ["9101.T", "9104.T", "9107.T", "9020.T", "9143.T"],
+    "7. IT・メガテック": ["9984.T", "9432.T", "AAPL", "MSFT", "GOOGL"],
+    "8. 商社・流通": ["8058.T", "8001.T", "8031.T", "8053.T", "3382.T"],
+    "9. 医薬品・バイオ": ["4502.T", "4519.T", "4568.T", "4503.T", "LLY"],
+    "10. 電気・精密機器": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
 seen_disclosures = set()
@@ -83,8 +83,7 @@ def fetch_all_technical_data():
                     "bias": round(bias, 1),
                     "rsi": round(rsi, 1),
                     "vol_ratio": round(vol_ratio, 2),
-                    "is_dip": is_dip,
-                    "win_rate": 75
+                    "is_dip": is_dip
                 }
             except Exception:
                 continue
@@ -105,7 +104,7 @@ class InstitutionalBoardView(View):
         
         sector_blocks = []
         for sector_name, tickers in SECTORS.items():
-            block = f"**{sector_name}**\n"
+            block = f"**【{sector_name}】**\n"
             for code in tickers:
                 tech = tech_data.get(code)
                 if tech:
@@ -115,18 +114,15 @@ class InstitutionalBoardView(View):
                     status = "🔥資金流入" if score >= 65 else ("⚡売買拮抗" if score >= 45 else "🔻資金流出")
                     block += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
                 else:
-                    block += f"> `{code.replace('.T','')}`: データ取得中...\n"
+                    block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
             sector_blocks.append(block)
 
-        # 💡 1通ごとに独立したTryで囲み、3セクターずつ全10セクター分を確実に連投
+        # 💡 3セクターずつ分割して連投（全10セクター分を完走させる）
         chunk_size = 3
         for i in range(0, len(sector_blocks), chunk_size):
             chunk = sector_blocks[i:i + chunk_size]
-            msg_text = "\n".join(chunk)
-            try:
-                await interaction.followup.send(msg_text)
-            except Exception as e:
-                print(f"送信エラー ({i}件目付近): {e}")
+            msg_text = "\n\n".join(chunk)
+            await interaction.followup.send(msg_text)
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
@@ -139,7 +135,7 @@ class InstitutionalBoardView(View):
                 found_count += 1
                 report += f"💡 **銘柄**: `{code}`\n"
                 report += f"├ **現在値**: {tech['price']} / **25日乖離率**: {tech['bias']}%\n"
-                report += f"├ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n\n"
+                report += f"└ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n\n"
         
         if found_count == 0:
             report += "現在、売られ過ぎ水準（RSI 35%以下）に達している絶好の押し目対象銘柄はありません。"
