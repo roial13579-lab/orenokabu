@@ -27,8 +27,9 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 📌 常設パネルを設置するDiscordチャンネルのID（※ここをご自身のチャンネルIDに変更してください）
-PANEL_CHANNEL_ID = 1535613064056152247
+# 📌 常設パネルを設置したいチャンネルID（※分からない場合は 0 のままでも最初に書き込めるチャンネルに自動常設されます）
+PANEL_CHANNEL_ID = 0
+
 # 主要10セクター 各5社（計50銘柄）
 SECTORS = {
     "⚡ 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -107,7 +108,6 @@ class InstitutionalBoardView(View):
     @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send("📊 **【業界別（各5社）リアルタイム資金動向】解析を開始します...**")
         
         tech_data = fetch_all_technical_data()
         
@@ -127,12 +127,12 @@ class InstitutionalBoardView(View):
                     block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
             sector_blocks.append(block)
 
-        # 💡 3セクター（15銘柄）ずつ束ねて順番に連投送信
+        # 💡 3セクター（15銘柄）ずつ分割して全て送信
         chunk_size = 3
         for i in range(0, len(sector_blocks), chunk_size):
             chunk = sector_blocks[i:i + chunk_size]
             msg_text = "\n".join(chunk)
-            await interaction.channel.send(msg_text)
+            await interaction.followup.send(msg_text)
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
@@ -199,24 +199,39 @@ def check_tdnet():
 # --- パネル自動設置・常設処理 ---
 async def setup_permanent_panel():
     try:
-        channel = bot.get_channel(PANEL_CHANNEL_ID)
-        if not channel:
-            print(f"チャンネルID {PANEL_CHANNEL_ID} が見つかりません。")
+        target_channel = None
+        
+        # 1. 指定されたIDのチャンネルを探す
+        if PANEL_CHANNEL_ID != 0:
+            target_channel = bot.get_channel(PANEL_CHANNEL_ID)
+            
+        # 2. 見つからない場合は、書き込み権限のある最初のチャンネルを自動取得
+        if not target_channel:
+            for guild in bot.guilds:
+                for channel in guild.text_channels:
+                    if channel.permissions_for(guild.me).send_messages:
+                        target_channel = channel
+                        break
+                if target_channel:
+                    break
+
+        if not target_channel:
+            print("送信可能なチャンネルが見つかりませんでした。")
             return
 
         # 古い自動投稿パネルがあれば削除
-        async for msg in channel.history(limit=10):
+        async for msg in target_channel.history(limit=10):
             if msg.author == bot.user and "常設ダッシュボード" in msg.content:
                 await msg.delete()
 
         # 新規常設パネルを送信
         view = InstitutionalBoardView()
-        await channel.send(
+        await target_channel.send(
             "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
             "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。",
             view=view
         )
-        print("常設パネルの設置完了。")
+        print(f"常設パネルを #{target_channel.name} に設置しました。")
     except Exception as e:
         print(f"Panel setup error: {e}")
 
