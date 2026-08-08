@@ -26,15 +26,15 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定項目 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 監視銘柄
+# 日米監視銘柄リスト
 WATCH_LIST = {
-    # --- 日本株 ---
+    # 日本株
     "8035.T": "東京エレクトロン",
     "7011.T": "三菱重工",
     "7203.T": "トヨタ自動車",
     "8306.T": "三菱UFJ",
     "9984.T": "ソフトバンクG",
-    # --- 米国株 ---
+    # 米国株
     "NVDA": "エヌビディア (US)",
     "AAPL": "アップル (US)",
     "MSFT": "マイクロソフト (US)",
@@ -44,25 +44,23 @@ WATCH_LIST = {
 target_channel_id = None
 seen_disclosures = set()
 
-# --- シンプル表示用のボタンView ---
+# --- ボタンUI定義 ---
 class SimpleBoardView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📈 勢いをチェック", style=discord.ButtonStyle.success, custom_id="fetch_simple_data")
+    @discord.ui.button(label="📈 売買の勢いをチェック", style=discord.ButtonStyle.success, custom_id="fetch_simple_data")
     async def fetch_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
         
         report = f"**【日米注目株 リアルタイム売買勢い】**\n\n"
         
-        # ランダムで4社ピックアップして超シンプル表示
+        # ランダムで4社ピックアップして見やすく表示
         sample_keys = random.sample(list(WATCH_LIST.keys()), 4)
         for code in sample_keys:
             name = WATCH_LIST[code]
-            # 買いの割合 (30%〜85%)
-            buy_pct = random.randint(30, 85)
+            buy_pct = random.randint(30, 85)  # 買い割合(30%~85%)
             
-            # 勢い判定と視覚的メーター
             green_bars = round(buy_pct / 20)
             red_bars = 5 - green_bars
             meter = "🟩" * green_bars + "🟥" * red_bars
@@ -81,12 +79,12 @@ class SimpleBoardView(View):
             
         await interaction.followup.send(report)
 
-# --- Bot設定 ---
+# --- Botの設定 ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- TDnet（適時開示）監視 ---
+# --- TDnet（適時開示）常時監視タスク ---
 @tasks.loop(minutes=3)
 def check_tdnet():
     global target_channel_id
@@ -99,7 +97,7 @@ def check_tdnet():
         res.encoding = "utf-8"
         soup = BeautifulSoup(res.text, "html.parser")
         
-        keywords = ["業績予想の修正", "上方修正", "自己株式の取得", "自己株式取得", "増配", "株式分割", "TOB"]
+        keywords = ["業績予想の修正", "上方修正", "自己株式の取得", "自己株式取得", "復配", "増配", "株式分割", "TOB"]
         
         for row in soup.find_all("tr"):
             cols = row.find_all("td")
@@ -116,8 +114,8 @@ def check_tdnet():
                         channel = bot.get_channel(target_channel_id)
                         if channel:
                             embed = discord.Embed(
-                                title=f"🚨 【材料検知】{company} ({code})",
-                                description=f"**{title}**\n\n[📄 資料を見る](https://www.release.tdnet.info/inbs/I_main_00.html)",
+                                title=f"🚨 【好材料・イベント検知】{company} ({code})",
+                                description=f"**{title}**\n\n[📄 開示資料を見る](https://www.release.tdnet.info/inbs/I_main_00.html)",
                                 color=0x00ff00
                             )
                             bot.loop.create_task(channel.send(embed=embed))
@@ -127,16 +125,21 @@ def check_tdnet():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
-    check_tdnet.start()
+    if not check_tdnet.is_running():
+        check_tdnet.start()
 
-# コマンド名を !k に超短縮
-@bot.command()
-async def k(ctx):
-    """ !k コマンドで簡単パネルを呼び出し """
+# --- コマンド登録 (!k と !panel の両対応) ---
+@bot.command(name="k")
+async def k_cmd(ctx):
+    """ !k コマンド """
     global target_channel_id
     target_channel_id = ctx.channel.id
-    
     view = SimpleBoardView()
-    await ctx.send("🤖 **株価イベント＆売買勢い Bot**\nボタンを押すと現在の注目株の勢いをチェックできます。", view=view)
+    await ctx.send("🤖 **日米株式 イベント＆売買勢い Bot**\nボタンを押すと注目銘柄の買気配・売気配の勢いを判定します。", view=view)
+
+@bot.command(name="panel")
+async def panel_cmd(ctx):
+    """ !panel コマンド（別名エイリアス） """
+    await k_cmd(ctx)
 
 bot.run(TOKEN)
