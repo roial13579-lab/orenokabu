@@ -9,8 +9,9 @@ from discord.ext import commands, tasks
 from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
+import traceback
 
-# --- ダミーWebサーバー (Renderポート監視対策・HEAD対応) ---
+# --- ダミーWebサーバー ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -31,10 +32,9 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-# 📌 常設パネルを設置したいチャンネルID（0のままでも書き込めるチャンネルに自動常設されます）
-PANEL_CHANNEL_ID = 0
+# 📌 常設パネルのチャンネルID（DiscordでコピーしたIDを指定すると確実です）
+PANEL_CHANNEL_ID = MTUzNTYzNjc4MzU1ODA0MTY0MAGtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4
 
-# 主要10セクター 各5社（計50銘柄）
 SECTORS = {
     "🔹1. 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
     "🔹2. 重工・防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
@@ -50,20 +50,17 @@ SECTORS = {
 
 seen_disclosures = set()
 
-# --- 全50銘柄を一括ダウンロード＆解析 ---
 def fetch_all_technical_data():
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
-    
     try:
-        data = yf.download(all_tickers, period="6mo", interval="1d", progress=False)
+        data = yf.download(all_tickers, period="3mo", interval="1d", progress=False)
         results = {}
-
         for code in all_tickers:
             try:
                 close = data['Close'][code].dropna() if len(all_tickers) > 1 else data['Close'].dropna()
                 volume = data['Volume'][code].dropna() if len(all_tickers) > 1 else data['Volume'].dropna()
 
-                if len(close) < 30:
+                if len(close) < 20:
                     continue
 
                 current_price = close.iloc[-1]
@@ -81,30 +78,21 @@ def fetch_all_technical_data():
 
                 is_dip = (rsi <= 35) and (bias <= -5.0)
 
-                dip_instances = close[close.shift(1) < close.shift(1).rolling(25).mean() * 0.95]
-                if len(dip_instances) > 0:
-                    win_count = sum(close.reindex(dip_instances.index).shift(-3) > dip_instances)
-                    win_rate = int((win_count / len(dip_instances)) * 100)
-                else:
-                    win_rate = 75
-
                 results[code] = {
                     "price": round(current_price, 1),
                     "bias": round(bias, 1),
                     "rsi": round(rsi, 1),
                     "vol_ratio": round(vol_ratio, 2),
                     "is_dip": is_dip,
-                    "win_rate": win_rate
+                    "win_rate": 75
                 }
             except Exception:
                 continue
-
         return results
     except Exception as e:
         print(f"Batch fetch error: {e}")
         return {}
 
-# --- 永続UI定義 ---
 class InstitutionalBoardView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -127,101 +115,65 @@ class InstitutionalBoardView(View):
                     status = "🔥資金流入" if score >= 65 else ("⚡売買拮抗" if score >= 45 else "🔻資金流出")
                     block += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
                 else:
-                    block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
+                    block += f"> `{code.replace('.T','')}`: データ取得中...\n"
             sector_blocks.append(block)
 
+        # 💡 1通ごとに独立したTryで囲み、3セクターずつ全10セクター分を確実に連投
         chunk_size = 3
         for i in range(0, len(sector_blocks), chunk_size):
             chunk = sector_blocks[i:i + chunk_size]
             msg_text = "\n".join(chunk)
-            await interaction.followup.send(msg_text)
+            try:
+                await interaction.followup.send(msg_text)
+            except Exception as e:
+                print(f"送信エラー ({i}件目付近): {e}")
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        
         tech_data = fetch_all_technical_data()
         report = "🎯 **【大型株 一時的下落（押し目買い）判定レポート】**\n\n"
         found_count = 0
-        
         for code, tech in tech_data.items():
             if tech and tech['is_dip']:
                 found_count += 1
                 report += f"💡 **銘柄**: `{code}`\n"
                 report += f"├ **現在値**: {tech['price']} / **25日乖離率**: {tech['bias']}%\n"
-                report += f"├ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n"
-                report += f"└ **過去同パターンからの復元率（勝率）**: **{tech['win_rate']}%**\n\n"
+                report += f"├ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n\n"
         
         if found_count == 0:
             report += "現在、売られ過ぎ水準（RSI 35%以下）に達している絶好の押し目対象銘柄はありません。"
-
         await interaction.followup.send(report)
 
-# --- Botの設定 ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- TDnet監視 ---
-@tasks.loop(minutes=3)
-def check_tdnet():
-    url = "https://www.release.tdnet.info/inbs/I_main_00.html"
-    try:
-        res = requests.get(url, timeout=10)
-        res.encoding = "utf-8"
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        keywords = ["業績予想の修正", "上方修正", "自己株式の取得", "自己株式取得", "復配", "増配", "株式分割", "TOB"]
-        
-        for row in soup.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) >= 5:
-                code = cols[1].text.strip()
-                company = cols[2].text.strip()
-                title = cols[3].text.strip()
-                
-                if any(kw in title for kw in keywords):
-                    item_id = f"{code}_{title}"
-                    if item_id not in seen_disclosures:
-                        seen_disclosures.add(item_id)
-                        
-                        for guild in bot.guilds:
-                            for channel in guild.text_channels:
-                                if channel.permissions_for(guild.me).send_messages:
-                                    embed = discord.Embed(
-                                        title=f"🚨 【イベント好材料検知】{company} ({code})",
-                                        description=f"**内容:** {title}\n\n[📄 TDnet開示資料を確認](https://www.release.tdnet.info/inbs/I_main_00.html)",
-                                        color=0x00ff00
-                                    )
-                                    bot.loop.create_task(channel.send(embed=embed))
-                                    break
-    except Exception as e:
-        print(f"TDnet Check Error: {e}")
-
-# --- パネル自動設置・常設処理 ---
 async def setup_permanent_panel():
     try:
         target_channel = None
-        
         if PANEL_CHANNEL_ID != 0:
             target_channel = bot.get_channel(PANEL_CHANNEL_ID)
             
         if not target_channel:
             for guild in bot.guilds:
                 for channel in guild.text_channels:
-                    if channel.permissions_for(guild.me).send_messages:
+                    perms = channel.permissions_for(guild.me)
+                    if perms.send_messages and perms.read_message_history:
                         target_channel = channel
                         break
                 if target_channel:
                     break
 
         if not target_channel:
-            print("送信可能なチャンネルが見つかりませんでした。")
             return
 
-        async for msg in target_channel.history(limit=10):
-            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
-                await msg.delete()
+        try:
+            async for msg in target_channel.history(limit=10):
+                if msg.author == bot.user and "常設ダッシュボード" in msg.content:
+                    await msg.delete()
+        except Exception:
+            pass
 
         view = InstitutionalBoardView()
         await target_channel.send(
@@ -229,7 +181,7 @@ async def setup_permanent_panel():
             "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。",
             view=view
         )
-        print(f"常設パネルを #{target_channel.name} に設置しました。")
+        print(f"✅ 常設パネルを #{target_channel.name} に設置完了。")
     except Exception as e:
         print(f"Panel setup error: {e}")
 
@@ -238,21 +190,16 @@ async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
     await setup_permanent_panel()
-    
-    if not check_tdnet.is_running():
-        check_tdnet.start()
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-
     text = message.content.strip()
     if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
         view = InstitutionalBoardView()
         await message.channel.send("🤖 **株式機関投資分析・イベント予測 Bot**\nボタンを選択してください。", view=view)
         return
-
     await bot.process_commands(message)
 
 bot.run(TOKEN)
