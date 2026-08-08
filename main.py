@@ -28,8 +28,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
 # 📌 常設パネルを設置するDiscordチャンネルのID（※ここをご自身のチャンネルIDに変更してください）
-PANEL_CHANNEL_ID = 1234567890123456789
-
+PANEL_CHANNEL_ID = 1535613064056152247
 # 主要10セクター 各5社（計50銘柄）
 SECTORS = {
     "⚡ 半導体・電子": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
