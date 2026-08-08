@@ -44,54 +44,70 @@ SECTORS = {
 
 seen_disclosures = set()
 
-# --- テクニカル分析＆勝率予測ロジック ---
-def analyze_stock_technical(ticker_symbol):
+# --- 全50銘柄を一括ダウンロード＆解析する超高速関数 ---
+def fetch_all_technical_data():
+    all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
+    
     try:
-        ticker = yf.Ticker(ticker_symbol)
-        df = ticker.history(period="6mo")
-        if len(df) < 30:
-            return None
+        # 50銘柄を1回の通信でまとめて取得（タイムアウト防止）
+        data = yf.download(all_tickers, period="6mo", interval="1d", progress=False)
+        results = {}
 
-        close = df['Close']
-        current_price = close.iloc[-1]
-        
-        # 25日移動平均線と乖離率
-        ma25 = close.rolling(window=25).mean().iloc[-1]
-        bias = ((current_price - ma25) / ma25) * 100
-        
-        # 14日RSI算出
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs.iloc[-1]))
-        
-        # 出来高変化率
-        vol_ma20 = df['Volume'].rolling(window=20).mean().iloc[-1]
-        vol_ratio = (df['Volume'].iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
+        for code in all_tickers:
+            try:
+                if len(all_tickers) > 1:
+                    close = data['Close'][code].dropna()
+                    volume = data['Volume'][code].dropna()
+                else:
+                    close = data['Close'].dropna()
+                    volume = data['Volume'].dropna()
 
-        # 押し目判定（RSI 35以下かつ25日線乖離率 -5%以下）
-        is_dip = (rsi <= 35) and (bias <= -5.0)
+                if len(close) < 30:
+                    continue
 
-        # 過去イベント時の復元率計算
-        dip_instances = df[(df['Close'].shift(1) < df['Close'].shift(1).rolling(25).mean() * 0.95)]
-        if len(dip_instances) > 0:
-            win_count = sum((df.loc[dip_instances.index, 'Close'].shift(-3) > df.loc[dip_instances.index, 'Close']))
-            win_rate = int((win_count / len(dip_instances)) * 100)
-        else:
-            win_rate = 75
+                current_price = close.iloc[-1]
+                
+                # 25日線乖離率
+                ma25 = close.rolling(window=25).mean().iloc[-1]
+                bias = ((current_price - ma25) / ma25) * 100
+                
+                # RSI(14)
+                delta = close.diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                rsi = 100 - (100 / (1 + rs.iloc[-1]))
+                
+                # 出来高変化率
+                vol_ma20 = volume.rolling(window=20).mean().iloc[-1]
+                vol_ratio = (volume.iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
 
-        return {
-            "price": round(current_price, 1),
-            "bias": round(bias, 1),
-            "rsi": round(rsi, 1),
-            "vol_ratio": round(vol_ratio, 2),
-            "is_dip": is_dip,
-            "win_rate": win_rate
-        }
+                # 押し目判定
+                is_dip = (rsi <= 35) and (bias <= -5.0)
+
+                # 勝率簡易推計
+                dip_instances = close[close.shift(1) < close.shift(1).rolling(25).mean() * 0.95]
+                if len(dip_instances) > 0:
+                    win_count = sum(close.reindex(dip_instances.index).shift(-3) > dip_instances)
+                    win_rate = int((win_count / len(dip_instances)) * 100)
+                else:
+                    win_rate = 75
+
+                results[code] = {
+                    "price": round(current_price, 1),
+                    "bias": round(bias, 1),
+                    "rsi": round(rsi, 1),
+                    "vol_ratio": round(vol_ratio, 2),
+                    "is_dip": is_dip,
+                    "win_rate": win_rate
+                }
+            except Exception:
+                continue
+
+        return results
     except Exception as e:
-        print(f"Error analyzing {ticker_symbol}: {e}")
-        return None
+        print(f"Batch fetch error: {e}")
+        return {}
 
 # --- UI定義 ---
 class InstitutionalBoardView(View):
@@ -101,14 +117,17 @@ class InstitutionalBoardView(View):
     @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send("📊 **【業界別（各5社）リアルタイム資金動向・買い圧力】解析を開始します...**")
         
-        # 文字数制限対策：セクターごとに分割送信
-        current_msg = ""
+        # 一括高速取得
+        tech_data = fetch_all_technical_data()
+        
+        messages = []
+        current_msg = "📊 **【業界別（各5社）リアルタイム資金動向・買い圧力】**\n\n"
+
         for sector_name, tickers in SECTORS.items():
             sector_block = f"**{sector_name}**\n"
             for code in tickers:
-                tech = analyze_stock_technical(code)
+                tech = tech_data.get(code)
                 if tech:
                     score = min(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 100)
                     bars = round(score / 20)
@@ -116,28 +135,34 @@ class InstitutionalBoardView(View):
                     status = "🔥資金流入" if score >= 65 else ("⚡売買拮抗" if score >= 45 else "🔻資金流出")
                     sector_block += f"> `{code.replace('.T','')}`: [{meter}] スコア **{score}** ({status} | RSI:{tech['rsi']}%)\n"
                 else:
-                    sector_block += f"> `{code}`: データ取得中/失敗\n"
+                    sector_block += f"> `{code.replace('.T','')}`: データ取得失敗\n"
             sector_block += "\n"
 
-            # 1,500文字を超えそうになったら1度送信してリセット
-            if len(current_msg) + len(sector_block) > 1500:
-                await interaction.channel.send(current_msg)
+            if len(current_msg) + len(sector_block) > 1700:
+                messages.append(current_msg)
                 current_msg = sector_block
             else:
                 current_msg += sector_block
 
         if current_msg:
-            await interaction.channel.send(current_msg)
+            messages.append(current_msg)
+
+        # 順次送信
+        for i, msg in enumerate(messages):
+            if i == 0:
+                await interaction.followup.send(msg)
+            else:
+                await interaction.channel.send(msg)
 
     @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
+        
+        tech_data = fetch_all_technical_data()
         report = "🎯 **【大型株 一時的下落（押し目買い）判定レポート】**\n\n"
         found_count = 0
         
-        all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
-        for code in all_tickers:
-            tech = analyze_stock_technical(code)
+        for code, tech in tech_data.items():
             if tech and tech['is_dip']:
                 found_count += 1
                 report += f"💡 **銘柄**: `{code}`\n"
@@ -178,18 +203,12 @@ def check_tdnet():
                     if item_id not in seen_disclosures:
                         seen_disclosures.add(item_id)
                         
-                        tech = analyze_stock_technical(f"{code}.T")
-                        win_str = f"{tech['win_rate']}%" if tech else "75%(過去推計)"
-                        
                         for guild in bot.guilds:
                             for channel in guild.text_channels:
                                 if channel.permissions_for(guild.me).send_messages:
                                     embed = discord.Embed(
                                         title=f"🚨 【イベント好材料検知】{company} ({code})",
-                                        description=f"**内容:** {title}\n\n"
-                                                    f"📊 **過去データ予測分析**\n"
-                                                    f"└ 同類イベント発生後の勝率: **{win_str}**\n"
-                                                    f"└ [📄 TDnet開示資料を確認](https://www.release.tdnet.info/inbs/I_main_00.html)",
+                                        description=f"**内容:** {title}\n\n[📄 TDnet開示資料を確認](https://www.release.tdnet.info/inbs/I_main_00.html)",
                                         color=0x00ff00
                                     )
                                     bot.loop.create_task(channel.send(embed=embed))
