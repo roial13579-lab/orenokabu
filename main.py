@@ -10,20 +10,26 @@ from discord.ui import Button, View
 import yfinance as yf
 import pandas as pd
 
-# --- ダミーWebサーバー (HEAD/GET完全対応) ---
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+# --- ダミーWebサーバー (HEAD/GETエラー完全解消) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"OK")
 
     def do_HEAD(self):
         self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
         self.end_headers()
+
+    # ログ出力時の標準エラー出力を抑制して綺麗に保つ
+    def log_message(self, format, *args):
+        return
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
@@ -31,7 +37,7 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 # --- 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
 
-PANEL_CHANNEL_ID = 0
+PANEL_CHANNEL_ID = 1535613064056152247
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
