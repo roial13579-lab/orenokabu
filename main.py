@@ -1,5 +1,12 @@
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
+import datetime
+import requests
+import random
+import discord
+from discord.ext import commands
+from discord.ui import Button, View
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -11,58 +18,38 @@ def run_dummy_server():
     server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-threading.Thread(target=run_dummy_server, daemon=True).start()import os
-import datetime
-import requests
-import random
-import discord
-from discord.ext import commands
-from discord.ui import Button, View
+threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # Step 1で取得したBotのトークンをここに貼り付けます
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
+
 WATCH_LIST = {
     "7203": "トヨタ自動車",
     "8035": "東京エレクトロン",
     "9984": "ソフトバンクG"
 }
 
-def fetch_board_analytics():
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    msg_lines = [
-        f"⚡ **【リアルタイム取得】板情報アナリティクス ({now_str})**",
-        "--------------------------------------------------"
-    ]
-    for code, name in WATCH_LIST.items():
-        seed = int(datetime.datetime.now().strftime("%Y%m%d%H%M")) + int(code)
-        random.seed(seed)
-        b_vol = random.randint(100000, 500000)
-        s_vol = random.randint(100000, 500000)
-        total = b_vol + s_vol
-        buy_ratio = (b_vol / total) * 100 if total > 0 else 50.0
-        
-        if buy_ratio >= 65.0:
-            signal = "🚀 圧倒的買い需要"
-        elif buy_ratio <= 35.0:
-            signal = "💥 圧倒的売り圧力"
-        else:
-            signal = "⚖️ 需給拮抗"
-            
-        msg_lines.append(f"・**{name} ({code})**: 買比率 `{buy_ratio:.1f}%` | {signal}")
-        
-    msg_lines.append("--------------------------------------------------")
-    return "\n".join(msg_lines)
-
-# ボタンの定義
 class BoardView(View):
     def __init__(self):
-        super().__init__(timeout=None) # ボタンを無期限に有効化
+        super().__init__(timeout=None)  # 永続ボタン
 
-    @discord.ui.button(label="📊 最新の板情報を取得", style=discord.ButtonStyle.primary, custom_id="fetch_board_btn")
-    async def button_callback(self, interaction: discord.Interaction):
-        # ボタンが押されたら即座に最新データを取得して返答
-        await interaction.response.defer(ephemeral=False)
-        report = fetch_board_analytics()
+    @discord.ui.button(label="📊 最新の板情報を取得", style=discord.ButtonStyle.primary, custom_id="fetch_board_data")
+    async def fetch_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(thinking=True)
+        
+        # 板情報の模擬レポート生成
+        report = f"**【リアルタイム板精査レポート】** ({datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n\n"
+        for code, name in WATCH_LIST.items():
+            buy_vol = random.randint(1000, 5000) * 100
+            sell_vol = random.randint(1000, 5000) * 100
+            ratio = round(buy_vol / sell_vol, 2)
+            
+            status = "買い優勢 🟢" if ratio > 1.2 else ("売り優勢 🔴" if ratio < 0.8 else "拮抗 🟡")
+            report += f"🔹 **{name} ({code})**\n"
+            report += f"   - 買い気配数量: {buy_vol:,} 株\n"
+            report += f"   - 売り気配数量: {sell_vol:,} 株\n"
+            report += f"   - 需給倍率: {ratio} ({status})\n\n"
+            
         await interaction.followup.send(report)
 
 intents = discord.Intents.default()
@@ -80,17 +67,3 @@ async def panel(ctx):
     await ctx.send("下部ボタンを押すと、いつでもリアルタイムの板情報を精査・取得します 📊", view=view)
 
 bot.run(TOKEN)
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def run_dummy_server():
-    server = HTTPServer(('0.0.0.0', 10000), SimpleHTTPRequestHandler)
-    server.serve_forever()
-
-threading.Thread(target=run_dummy_server, daemon=True).start()
