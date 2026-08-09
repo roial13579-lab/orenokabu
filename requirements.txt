@@ -1,3 +1,4 @@
 discord.py
-yfinance
+yfinance>=0.2.54
+curl_cffi
 pandas
