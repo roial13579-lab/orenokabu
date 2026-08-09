@@ -1,10 +1,12 @@
 import os
+import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 import yfinance as yf
+from curl_cffi import requests as cffi_requests
 
 # --- Render用ダミーサーバー ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -45,44 +47,89 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
+# キャッシュ保持用辞書 (キー: ticker, 値: (timestamp, data_dict))
+STOCK_CACHE = {}
+CACHE_TTL = 300  # キャッシュ有効期限: 5分 (300秒)
+
+def get_session():
+    # curl_cffiを利用してブラウザアクセスを模倣
+    try:
+        session = cffi_requests.Session(impersonate="chrome110")
+        return session
+    except Exception:
+        return None
+
+def fetch_single_ticker_data(ticker: str):
+    now = time.time()
+    if ticker in STOCK_CACHE:
+        cached_time, cached_data = STOCK_CACHE[ticker]
+        if now - cached_time < CACHE_TTL:
+            return cached_data
+
+    try:
+        session = get_session()
+        ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
+        df = ticker_obj.history(period="1mo", interval="1d")
+        
+        if df.empty or len(df['Close']) == 0:
+            return None
+
+        close = df['Close'].dropna()
+        volume = df['Volume'].dropna() if 'Volume' in df else []
+
+        if len(close) == 0:
+            return None
+
+        current_price = close.iloc[-1]
+        ma25 = close.mean()
+        bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
+
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).mean()
+        loss = (-delta.where(delta < 0, 0)).mean()
+        rs = gain / loss if loss != 0 else 1
+        rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
+
+        vol_ma = volume.mean() if len(volume) > 0 else 0
+        vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
+
+        is_dip = (rsi <= 35) and (bias <= -5.0)
+
+        result = {
+            "price": round(float(current_price), 1),
+            "bias": round(float(bias), 1),
+            "rsi": round(float(rsi), 1),
+            "vol_ratio": round(float(vol_ratio), 2),
+            "is_dip": is_dip
+        }
+
+        STOCK_CACHE[ticker] = (now, result)
+        return result
+    except Exception as e:
+        print(f"Error fetching {ticker}: {e}")
+        return None
+
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
     ticker = f"{code_input}.T" if code_input.isdigit() and len(code_input) == 4 else code_input
-    
-    try:
-        df = yf.download(ticker, period="1mo", interval="1d", progress=False)
-        if not df.empty and len(df['Close']) > 0:
-            close = df['Close'].dropna()
-            current_price = close.iloc[-1]
-            ma25 = close.mean()
-            bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
-            
-            delta = close.diff()
-            gain = (delta.where(delta > 0, 0)).mean()
-            loss = (-delta.where(delta < 0, 0)).mean()
-            rs = gain / loss if loss != 0 else 1
-            rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
-            
-            is_dip = (rsi <= 35) and (bias <= -5.0)
-            status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if is_dip else "⚡ 正常範囲内（押し目水準ではありません）"
 
-            return (
-                f"📊 **【個別銘柄解析】`{code_input}`**\n"
-                f"├ **現在値**: {round(float(current_price), 1)}\n"
-                f"├ **25日乖離率**: {round(float(bias), 1)}%\n"
-                f"├ **RSI(14)**: {round(float(rsi), 1)}%\n"
-                f"└ **判定**: {status_str}"
-            )
-        else:
-            return f"⚠️ `{code_input}` の株価データを取得できませんでした。銘柄コードをご確認ください。"
-    except Exception as e:
-        return f"❌ 解析エラーが発生しました: {e}"
+    tech = fetch_single_ticker_data(ticker)
+    if tech:
+        status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if tech['is_dip'] else "⚡ 正常範囲内（押し目水準ではありません）"
+        return (
+            f"📊 **【個別銘柄解析】`{code_input}`**\n"
+            f"├ **現在値**: {tech['price']}\n"
+            f"├ **25日乖離率**: {tech['bias']}%\n"
+            f"├ **RSI(14)**: {tech['rsi']}%\n"
+            f"└ **判定**: {status_str}"
+        )
+    else:
+        return f"⚠️ `{code_input}` の株価データを取得できませんでした。アクセス制限中か、コードが誤っている可能性があります。少し時間をおいて再試行してください。"
 
-# --- 検索用モーダル（入力フォーム画面） ---
 class StockSearchModal(Modal, title="銘柄テクニカル判定検索"):
     stock_code = TextInput(
         label="銘柄コード または ティッカーを入力",
-        placeholder="例: 7011, 8035, NVDA, TSLA",
+        placeholder="例: 7011, 8035, 4052, NVDA",
         min_length=1,
         max_length=10,
         required=True
@@ -96,46 +143,11 @@ class StockSearchModal(Modal, title="銘柄テクニカル判定検索"):
 def fetch_all_technical_data():
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
     results = {}
-    try:
-        data = yf.download(all_tickers, period="1mo", interval="1d", progress=False)
-        for code in all_tickers:
-            try:
-                if len(all_tickers) > 1:
-                    close = data['Close'][code].dropna()
-                    volume = data['Volume'][code].dropna()
-                else:
-                    close = data['Close'].dropna()
-                    volume = data['Volume'].dropna()
-
-                if len(close) == 0:
-                    continue
-
-                current_price = close.iloc[-1]
-                ma25 = close.mean()
-                bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
-                
-                delta = close.diff()
-                gain = (delta.where(delta > 0, 0)).mean()
-                loss = (-delta.where(delta < 0, 0)).mean()
-                rs = gain / loss if loss != 0 else 1
-                rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
-                
-                vol_ma = volume.mean()
-                vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
-
-                is_dip = (rsi <= 35) and (bias <= -5.0)
-
-                results[code] = {
-                    "price": round(float(current_price), 1),
-                    "bias": round(float(bias), 1),
-                    "rsi": round(float(rsi), 1),
-                    "vol_ratio": round(float(vol_ratio), 2),
-                    "is_dip": is_dip
-                }
-            except Exception:
-                continue
-    except Exception as e:
-        print(f"Fetch Error: {e}")
+    for code in all_tickers:
+        tech = fetch_single_ticker_data(code)
+        if tech:
+            results[code] = tech
+        time.sleep(0.1)  # 連続アクセス対策のマイクロウェイト
     return results
 
 class InstitutionalBoardView(View):
@@ -144,7 +156,6 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🔍 銘柄検索", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
-        # 検索ウィンドウ（モーダル）を表示
         await interaction.response.send_modal(StockSearchModal())
 
     @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
@@ -237,12 +248,10 @@ async def on_message(message):
 
     text = message.content.strip()
 
-    # 常設パネル呼び出し
     if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
         await send_or_move_panel(message.channel)
         return
 
-    # コマンド直接入力（!c 7011 や !check NVDA）
     if text.startswith("!c ") or text.startswith("!check "):
         parts = text.split()
         if len(parts) >= 2:
