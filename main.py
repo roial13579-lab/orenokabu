@@ -192,7 +192,7 @@ async def on_message(message):
         return
 
     text = message.content.strip()
-    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
+    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅ l"]:
         await send_or_move_panel(message.channel)
         return
 
