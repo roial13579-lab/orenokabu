@@ -27,13 +27,11 @@ def run_dummy_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# サーバーを別スレッドで即座に開始
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # --- Discord Bot 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg"
 PANEL_CHANNEL_ID = 1535613064056152247
-
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
     "2.重工防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
@@ -152,7 +150,8 @@ async def send_or_move_panel(channel):
     view = InstitutionalBoardView()
     await channel.send(
         "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
-        "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。",
+        "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。\n"
+        "※個別銘柄の検索・判定は `!check 銘柄コード`（例: `!c 7011` や `!check NVDA`）で実行できます。",
         view=view
     )
 
@@ -182,10 +181,53 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot:
         return
+
     text = message.content.strip()
+
+    # 常設パネル呼び出し
     if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
         await send_or_move_panel(message.channel)
         return
+
+    # 個別銘柄チェックコマンド（例: !c 7011 や !check NVDA）
+    if text.startswith("!c ") or text.startswith("!check "):
+        parts = text.split()
+        if len(parts) >= 2:
+            code_input = parts[1].upper()
+            ticker = f"{code_input}.T" if code_input.isdigit() and len(code_input) == 4 else code_input
+            
+            async with message.channel.typing():
+                try:
+                    df = yf.download(ticker, period="1mo", interval="1d", progress=False)
+                    if not df.empty and len(df['Close']) > 0:
+                        close = df['Close'].dropna()
+                        current_price = close.iloc[-1]
+                        ma25 = close.mean()
+                        bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
+                        
+                        delta = close.diff()
+                        gain = (delta.where(delta > 0, 0)).mean()
+                        loss = (-delta.where(delta < 0, 0)).mean()
+                        rs = gain / loss if loss != 0 else 1
+                        rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
+                        
+                        is_dip = (rsi <= 35) and (bias <= -5.0)
+                        status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if is_dip else "⚡ 正常範囲内（押し目水準ではありません）"
+
+                        res_msg = (
+                            f"📊 **【個別銘柄解析】`{code_input}`**\n"
+                            f"├ **現在値**: {round(float(current_price), 1)}\n"
+                            f"├ **25日乖離率**: {round(float(bias), 1)}%\n"
+                            f"├ **RSI(14)**: {round(float(rsi), 1)}%\n"
+                            f"└ **判定**: {status_str}"
+                        )
+                        await message.channel.send(res_msg)
+                    else:
+                        await message.channel.send(f"⚠️ `{code_input}` の株価データを取得できませんでした。銘柄コードをご確認ください。")
+                except Exception as e:
+                    await message.channel.send(f"❌ 解析エラーが発生しました: {e}")
+        return
+
     await bot.process_commands(message)
 
 # Bot起動
