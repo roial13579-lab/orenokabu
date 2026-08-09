@@ -6,7 +6,7 @@ from discord.ext import commands
 from discord.ui import Button, View
 import yfinance as yf
 
-# --- ダミーWebサーバー (HEAD/GET完全対応) ---
+# --- Render用ダミーサーバー ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -23,15 +23,15 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         pass
 
 def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", "10000"))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
+# サーバーを別スレッドで即座に開始
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# --- 設定 ---
+# --- Discord Bot 設定 ---
 TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.Gtp5RX.I0mHrbwMsKOJT-yWz6E50oYkpGUvj2ENnSPbZ4"
-
 PANEL_CHANNEL_ID = 1535613064056152247
 
 SECTORS = {
@@ -99,11 +99,8 @@ class InstitutionalBoardView(View):
     @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        
         tech_data = fetch_all_technical_data()
-        
         full_report = "📊 **【全10セクター 資金流入力学リアルタイム解析】**\n\n"
-        
         for sector_name, tickers in SECTORS.items():
             full_report += f"**🔹 {sector_name}**\n"
             line_items = []
@@ -116,7 +113,6 @@ class InstitutionalBoardView(View):
                     line_items.append(f"`{clean_code}`:{status}{score}")
                 else:
                     line_items.append(f"`{clean_code}`:取得中")
-            
             full_report += "> " + " | ".join(line_items) + "\n\n"
 
         await interaction.followup.send(full_report)
@@ -134,10 +130,8 @@ class InstitutionalBoardView(View):
                 report += f"💡 **銘柄**: `{code}`\n"
                 report += f"├ **現在値**: {tech['price']} / **25日乖離率**: {tech['bias']}%\n"
                 report += f"└ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n\n"
-        
         if found_count == 0:
             report += "現在、売られ過ぎ水準（RSI 35%以下）に達している絶好の押し目対象銘柄はありません。"
-        
         await interaction.followup.send(report)
         await send_or_move_panel(interaction.channel)
 
@@ -166,7 +160,6 @@ async def setup_permanent_panel():
     target_channel = None
     if PANEL_CHANNEL_ID != 0:
         target_channel = bot.get_channel(PANEL_CHANNEL_ID)
-        
     if not target_channel:
         for guild in bot.guilds:
             for channel in guild.text_channels:
@@ -176,7 +169,6 @@ async def setup_permanent_panel():
                     break
             if target_channel:
                 break
-
     if target_channel:
         await send_or_move_panel(target_channel)
 
@@ -190,12 +182,10 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot:
         return
-
     text = message.content.strip()
-    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅ l"]:
+    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
         await send_or_move_panel(message.channel)
         return
-
     await bot.process_commands(message)
 
 bot.run(TOKEN)
