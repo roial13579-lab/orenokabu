@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
@@ -188,4 +189,10 @@ async def on_message(message):
         return
     await bot.process_commands(message)
 
-bot.run(TOKEN)
+# 接続エラーが発生してもプロセスを落とさず再試行するループ
+while True:
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print(f"Bot connection error: {e}. Retrying in 30 seconds...")
+        time.sleep(30)
