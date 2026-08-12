@@ -84,7 +84,6 @@ def get_session():
         return None
 
 def fetch_single_ticker_data(ticker: str):
-    """テクニカル優先・エラー安全設計の株価データ取得関数"""
     now = time.time()
     if ticker in STOCK_CACHE:
         cached_time, cached_data = STOCK_CACHE[ticker]
@@ -95,10 +94,8 @@ def fetch_single_ticker_data(ticker: str):
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
         
-        # 1. 株価（チャート）データを優先取得
         df = ticker_obj.history(period="6mo", interval="1d")
         if df.empty or len(df['Close']) < 25:
-            # 取得失敗時はセッションなしで再試行
             df = yf.Ticker(ticker).history(period="6mo", interval="1d")
             if df.empty or len(df['Close']) < 25:
                 return None
@@ -107,7 +104,6 @@ def fetch_single_ticker_data(ticker: str):
         volume = df['Volume'].dropna() if 'Volume' in df else pd.Series()
         current_price = close.iloc[-1]
         
-        # テクニカル計算
         sma5 = close.rolling(window=5).mean()
         sma25 = close.rolling(window=25).mean()
         bias = ((current_price - sma25.iloc[-1]) / sma25.iloc[-1]) * 100 if sma25.iloc[-1] != 0 else 0
@@ -132,7 +128,6 @@ def fetch_single_ticker_data(ticker: str):
         vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
 
-        # 2. 財務データ取得（エラーが発生しても無視してテクニカルのみで返すガード）
         per, roe, revenue_growth, market_cap = None, None, None, None
         try:
             info = ticker_obj.info or {}
@@ -143,7 +138,6 @@ def fetch_single_ticker_data(ticker: str):
         except Exception as e:
             print(f"Info warning for {ticker}: {e}")
 
-        # 10倍株スクリーニング判定
         market_cap_ok = False
         if market_cap:
             if ticker.endswith(".T"):
@@ -157,6 +151,7 @@ def fetch_single_ticker_data(ticker: str):
 
         is_tenbagger_candidate = market_cap_ok and has_rev and has_roe and has_per
         is_dip = (rsi <= 35) and (bias <= -5.0)
+        is_overbought = (rsi >= 70) or (bias >= 15.0)
 
         result = {
             "price": round(float(current_price), 1),
@@ -166,6 +161,7 @@ def fetch_single_ticker_data(ticker: str):
             "is_gc": is_gc,
             "bb_breakout": bb_breakout,
             "is_dip": is_dip,
+            "is_overbought": is_overbought,
             "is_tenbagger": is_tenbagger_candidate,
             "per": round(float(per), 1) if per else "N/A",
             "roe": round(float(roe * 100), 1) if roe else "N/A",
@@ -184,10 +180,29 @@ def analyze_single_ticker(code_input: str):
 
     tech = fetch_single_ticker_data(ticker)
     if tech:
-        status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if tech['is_dip'] else "⚡ レンジ内"
+        # アクションアドバイスの自動判定ロジック
+        if tech['is_dip']:
+            status_str = "🎯 **押し目買いシグナル（売られ過ぎ）**"
+            advice_str = "🟢 **【新規買い検討】/ 既存保有なら【買い増し・ホールド】**\n└ *理由:* 25日乖離率・RSIともに売られすぎ水準。短期的な自律反発（リバウンド）を狙いやすい局面です。"
+        elif tech['is_tenbagger'] and (tech['is_gc'] or tech['bb_breakout']):
+            status_str = "🌟 **10倍株候補 ＋ 上昇トレンド発生**"
+            advice_str = "🔥 **【強力な買い推奨 / 上昇乗車】**\n└ *理由:* 優秀な業績・財務を背景に上昇シグナルが発生中。中長期での大化けに期待。"
+        elif tech['bb_breakout']:
+            status_str = "🚀 **+2σ ブレイクアウト（上昇モメンタム）**"
+            advice_str = "🚀 **【順張り（短買）検討】/ 保有なら【利確準備】**\n└ *理由:* 勢いが強い一方、過熱感も出やすいため、保有中の場合は利確ラインを引き上げてください。"
+        elif tech['is_gc']:
+            status_str = "✅ **ゴールデンクロス（トレンド転換）**"
+            advice_str = "🟢 **【打診買い検討】/ 保有なら【継続ホールド】**\n└ *理由:* 短期移動平均線が中期線を上抜け。下降から上昇への初期転換をとらえています。"
+        elif tech['is_overbought']:
+            status_str = "⚠️ **過熱警戒（買われ過ぎ）**"
+            advice_str = "🔴 **【新規買い見送り】/ 保有なら【売り検討・利益確定】**\n└ *理由:* RSIや乖離率が高水準。機関投資家の利益確定売りに押されるリスクがあります。"
+        else:
+            status_str = "⚡ **正常レンジ内**"
+            advice_str = "🟡 **【様子見】（トレンド発生待ち）**\n└ *理由:* 明確な売られすぎ・買われすぎのシグナルがありません。明確な転換を待ちましょう。"
+
         gc_str = "✅ 発生" if tech['is_gc'] else "➖ なし"
         bb_str = "🚀 +2σ上抜け" if tech['bb_breakout'] else "➖ 正常値"
-        tb_str = "🌟 10倍株基準クリア（高成長・適正評価）" if tech['is_tenbagger'] else "➖ 基準外"
+        tb_str = "🌟 10倍株基準クリア" if tech['is_tenbagger'] else "➖ 基準外"
 
         return (
             f"📊 **【多角的銘柄・罫線解析】`{code_input}`**\n"
@@ -198,7 +213,8 @@ def analyze_single_ticker(code_input: str):
             f"├ **ボリンジャーバンド**: {bb_str}\n"
             f"├ **10倍株スクリーニング**: {tb_str}\n"
             f"├ **指標情報**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
-            f"└ **判定**: {status_str}"
+            f"├ **判定**: {status_str}\n"
+            f"└ 💡 **アクションアドバイス**:\n{advice_str}"
         )
     else:
         return f"⚠️ `{code_input}` の株価データを取得できませんでした。コードが正しいか確認の上、少し時間をおいて再試行してください。"
