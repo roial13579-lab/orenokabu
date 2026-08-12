@@ -61,11 +61,10 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # --- Discord Bot 設定 ---
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", os.environ.get("TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg"))
 
-# チャンネルIDの設定
 DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "1537090733490835498")))
-GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "1535613064056152247"))  # 一般チャンネル
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))      # 売買アラート
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))    # 定時レポート
+GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "1535613064056152247"))
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -267,9 +266,8 @@ def get_action_advice(tech):
     else:
         return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
 
-# ★必ず「#一般」チャンネルへ送信するためのヘルパー関数
+# ★必ず「#一般」チャンネルへ送信し、ダッシュボードには何も残さない送信関数
 async def send_to_general_channel(interaction: discord.Interaction, full_text: str):
-    # 送信先の「一般」チャンネルを取得
     target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else interaction.channel
 
     chunks = []
@@ -283,13 +281,17 @@ async def send_to_general_channel(interaction: discord.Interaction, full_text: s
     if curr_chunk:
         chunks.append(curr_chunk)
 
-    # 一般チャンネルへメッセージを分割送信
     for chunk in chunks:
         await target_channel.send(chunk)
 
-    # ダッシュボード上で押したユーザーには、自分だけに見えるメッセージで完了通知
+    # ダッシュボード内には何もスレッドやメッセージを残さず、一時的なポップアップだけ表示
     channel_mention = target_channel.mention if hasattr(target_channel, 'mention') else "一般"
-    await interaction.followup.send(f"✅ {channel_mention} チャンネルに解析結果を送信しました！", ephemeral=True)
+    msg = f"✅ {channel_mention} チャンネルに解析結果を送信しました！"
+    
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -330,6 +332,7 @@ class StockSearchModal(Modal, title="銘柄テクニカル＆板情報検索"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # モーダル送信時も即座に defer して応答状態を作る
         await interaction.response.defer(ephemeral=True)
         res_msg = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
         await send_to_general_channel(interaction, res_msg)
@@ -344,7 +347,8 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
+        # ダッシュボード上に返信メッセージを残さない処理
+        await send_to_general_channel(interaction, "⏳ 各業界の資金動向を取得中です...（少々お待ちください）")
         
         full_report = "📊 **【10大業界 世界ニュース・マクロ要因別 資金流入力学】**\n"
         if LAST_CACHE_TIME:
@@ -389,11 +393,12 @@ class InstitutionalBoardView(View):
         full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
         full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
 
-        await send_to_general_channel(interaction, full_report)
+        # 一般チャンネルに送信
+        target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else interaction.channel
+        await target_channel.send(full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
         report = "🎯 **【過去データ対比 注目シグナル抽出銘柄】**\n\n"
         found_count = 0
         for code, tech in DATA_CACHE.items():
@@ -419,7 +424,6 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
         report = "⚡ **【大口買い集中・板急変分析】**\n\n"
         found = False
 
@@ -440,7 +444,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- パネルの自動固定関数 ---
 async def ensure_dashboard_panel():
     if not DASHBOARD_CHANNEL_ID:
         return
@@ -448,7 +451,6 @@ async def ensure_dashboard_panel():
     if not channel:
         return
     try:
-        # ダッシュボード内の全メッセージをクリアしてボタンのみ再構築
         await channel.purge(limit=20)
     except Exception:
         pass
@@ -461,7 +463,6 @@ async def ensure_dashboard_panel():
         view=view
     )
 
-# --- バックグラウンド監視（「#売買アラート」へ送信） ---
 @tasks.loop(minutes=10)
 async def real_time_signal_monitor():
     await bot.wait_until_ready()
@@ -510,7 +511,6 @@ async def real_time_signal_monitor():
             )
             await channel.send(msg)
 
-# --- 市場前後の定時レポート（「#定時レポート」へ送信） ---
 @tasks.loop(minutes=1)
 async def scheduled_market_reports():
     await bot.wait_until_ready()
