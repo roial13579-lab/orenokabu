@@ -73,8 +73,52 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
+# セクターごとのファンダメンタルズ／マクロ変動要因解説データベース
+SECTOR_MACRO_FACTORS = {
+    "1.半導体": {
+        "high": "AIインフラ投資増に加え、先端製造プロセスの需給ひっ迫や水不足・製造制約懸念による価格転嫁期待で資金集中。",
+        "low": "米ハイテク株の調整や先端製造ラインでの水不足・供給懸念、過熱警戒による利益確定売りが先行。"
+    },
+    "2.重工防衛": {
+        "high": "防衛予算拡大に伴う長期受注拡大期待や地政学リスク高まりを受け、防衛・造船・重機へ長期資金が流入。",
+        "low": "短期的材料出尽くし感や、為替の円高シフト警戒により一時的なポジション調整売り。"
+    },
+    "3.自動車": {
+        "high": "為替の円安推移や米国・新興国需要の堅調さ背景に、輸出採算改善を見込んだ買いが入る。",
+        "low": "円高進行による業績下振れ懸念や、関税・貿易摩擦・EV需要一巡による警戒感が重荷。"
+    },
+    "4.大型金融": {
+        "high": "日銀の利上げ観測や金利上昇に伴う貸出利ざや・運用利回り改善期待から、銀行・保険へ資金が流入。",
+        "low": "金利上昇が一服し、金利据え置き観測や経済減速懸念による利益確定売り。"
+    },
+    "5.エネ資源": {
+        "high": "原油・天然ガス価格の高騰や中東・地政学リスク、インフレヘッジとしての資源株買い。",
+        "low": "世界的な景気減速懸念による原油・商品需要減退予測や、資源価格の下落調整。"
+    },
+    "6.海運物流": {
+        "high": "地政学上の航路回航（紅海問題等）や燃料油価格の変動、運賃指数上昇による業績上振れ期待。",
+        "low": "コンテナ運賃・バルク指数の下落や、燃料コスト増加による利益率圧縮懸念。"
+    },
+    "7.メガテック": {
+        "high": "クラウド・生成AI需要の拡大や自社株買い・配当増額など株主還元姿勢を好感。",
+        "low": "金利高止まりによる高PER株からの資金シフトや、大規模IT投資に対する投資回収スピードの懸念。"
+    },
+    "8.商社流通": {
+        "high": "バフェット効果・高配当・自社株買いなどの株主還元強化や資源価格安定による総合的な資金流入。",
+        "low": "資源価格の一服や円高転換による貿易・事業利益の目減り懸念。"
+    },
+    "9.医薬バイオ": {
+        "high": "肥満症薬等の新薬大ヒット期待や、景気後退に強いディフェンシブ資産としての資金逃避買い。",
+        "low": "薬価改定リスクや特許切れ（クリフ）問題、ハイテク等へのリスクオン資金移動。"
+    },
+    "10.電気精密": {
+        "high": "産業用ロボット・パワー半導体需要の回復や円安恩恵による業績上方修正期待。",
+        "low": "中国市場等での設備投資停滞や、消費財需要の減速懸念。"
+    }
+}
+
 STOCK_CACHE = {}
-CACHE_TTL = 300  # キャッシュ 5分
+CACHE_TTL = 300
 
 def get_session():
     try:
@@ -175,7 +219,6 @@ def fetch_single_ticker_data(ticker: str):
         return None
 
 def get_action_advice(tech):
-    """共通アクション判断関数"""
     if tech['is_dip']:
         return "🟢 **【新規買い検討】/ 保有なら【買増し】** (自律反発狙い)"
     elif tech['is_tenbagger'] and (tech['is_gc'] or tech['bb_breakout']):
@@ -265,7 +308,7 @@ class InstitutionalBoardView(View):
         await interaction.response.defer(thinking=True)
         tech_data = fetch_all_technical_data()
         
-        full_report = "📊 **【全10セクター 資金流入力学・変動分析レポート】**\n\n"
+        full_report = "📊 **【全10セクター 資金流入力学・要因分析レポート】**\n\n"
         sector_scores = {}
 
         for sector_name, tickers in SECTORS.items():
@@ -285,17 +328,24 @@ class InstitutionalBoardView(View):
             
             avg_score = int(sum(scores) / len(scores)) if scores else 0
             sector_scores[sector_name] = avg_score
-            full_report += "> " + " | ".join(line_items) + f"\n└ **セクター平均勢い**: `{avg_score}点`\n\n"
+            
+            # マクロ変動要因の自動判定
+            macro_info = SECTOR_MACRO_FACTORS.get(sector_name, {"high": "需要拡大期待。", "low": "利確・調整売り。"})
+            reason_str = macro_info["high"] if avg_score >= 50 else macro_info["low"]
 
-        # 資金流入力学の全体分析サマリーを自動付与
+            full_report += "> " + " | ".join(line_items) + f"\n"
+            full_report += f"├ **セクター勢い**: `{avg_score}点`\n"
+            full_report += f"└ 🧠 **変動要因**: {reason_str}\n\n"
+
+        # 資金流入力学の全体マクロ分析サマリー
         sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
         top_sector = sorted_sectors[0] if sorted_sectors else ("なし", 0)
         bottom_sector = sorted_sectors[-1] if sorted_sectors else ("なし", 0)
 
-        full_report += "📈 **【業界全体の資金変動・市場センチメント分析】**\n"
-        full_report += f"├ 🔥 **資金集中セクター**: **{top_sector[0]}** (平均 `{top_sector[1]}点`)\n"
-        full_report += f"├ 🔻 **資金停滞セクター**: **{bottom_sector[0]}** (平均 `{bottom_sector[1]}点`)\n"
-        full_report += f"└ 💡 **立ち回り指針**: 最も勢いのある上位セクターへの「トレンドフォロー（買）」か、停滞セクターからの「売られすぎ反発」に注目するのが効果的です。\n"
+        full_report += "📈 **【業界全体の資金変動・マクロ市場構造】**\n"
+        full_report += f"├ 🔥 **資金集中**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
+        full_report += f"├ 🔻 **資金停滞**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)\n"
+        full_report += f"└ 🧭 **市場力学**: 現在は「{top_sector[0]}」にテーマ性・金利/需要面の追い風で好循環が発生中。一方「{bottom_sector[0]}」は短期的な材料不足・調整局面にあります。\n"
 
         await interaction.followup.send(full_report)
         await send_or_move_panel(interaction.channel)
