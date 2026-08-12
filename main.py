@@ -59,9 +59,11 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot 設定 ---
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg")
-# 通知飛ばし用チャンネルID
-PANEL_CHANNEL_ID = int(os.environ.get("PANEL_CHANNEL_ID", "1535613064056152247"))
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+
+# ★チャンネルIDの設定（Renderの環境変数から取得、未設定時はフォールバック）
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))   # #売買アラート のID
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122")) # #定時レポート のID
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -76,7 +78,6 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-# 世界ニュース・マクロ要因マッピング
 SECTOR_NEWS_FACTORS = {
     "1.半導体": {
         "high": "🌐 **【米ハイテク・AI投資連動】** 米SOX指数上昇や大手ビッグテックの巨額AIインフラ需要により大口資金が集中。",
@@ -120,7 +121,6 @@ SECTOR_NEWS_FACTORS = {
     }
 }
 
-# キャッシュ保持用変数
 DATA_CACHE = {}
 LAST_CACHE_TIME = None
 alert_history = {}
@@ -132,12 +132,10 @@ def get_session():
         return None
 
 def fetch_ticker_full_analysis(ticker: str):
-    """【過去データ照合型】単一銘柄のテクニカル・需給データ計算"""
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
         
-        # 過去半年分のデータを取得して過去データと照合
         df = ticker_obj.history(period="6mo", interval="1d")
         if df.empty or len(df['Close']) < 30:
             df = yf.Ticker(ticker).history(period="6mo", interval="1d")
@@ -150,9 +148,7 @@ def fetch_ticker_full_analysis(ticker: str):
         prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
         day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
 
-        # 過去20日間の最高値・安値（過去データ照合用）
         past_20d_high = close.iloc[-21:-1].max() if len(close) >= 21 else close.max()
-        past_20d_low = close.iloc[-21:-1].min() if len(close) >= 21 else close.min()
         is_20d_high_breakout = current_price > past_20d_high
 
         sma5 = close.rolling(window=5).mean()
@@ -181,12 +177,14 @@ def fetch_ticker_full_analysis(ticker: str):
         bb_breakout = current_price > upper_band.iloc[-1]
         bb_oversold = current_price < lower_band.iloc[-1]
 
-        # 過去25日平均出来高との比較（異常な出来高急増の検知）
         vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = round((volume.iloc[-1] / vol_ma), 2) if vol_ma > 0 else 1.0
         vol_spike = vol_ratio >= 1.8
 
         bid_ask_ratio = 1.0
+        per, roe, revenue_growth = "N/A", "N/A", "N/A"
+        is_tenbagger = False
+
         try:
             info = ticker_obj.info or {}
             bid = info.get("bidSize", 0)
@@ -195,18 +193,7 @@ def fetch_ticker_full_analysis(ticker: str):
                 bid_ask_ratio = round(bid / ask, 2)
             else:
                 bid_ask_ratio = round(vol_ratio * (1.2 if current_price > prev_price else 0.8), 2)
-        except Exception:
-            pass
 
-        # 過去の動きと照らした大口買い集中検知
-        board_breakout_imminent = (bid_ask_ratio >= 1.5) and vol_spike
-        is_dip = (rsi <= 35 or bb_oversold) and (bias25 <= -5.0)
-        is_overbought = (rsi >= 72) or (bias25 >= 15.0)
-
-        per, roe, revenue_growth = "N/A", "N/A", "N/A"
-        is_tenbagger = False
-        try:
-            info = ticker_obj.info or {}
             per_val = info.get("trailingPE") or info.get("forwardPE")
             roe_val = info.get("returnOnEquity")
             rev_val = info.get("revenueGrowth")
@@ -220,6 +207,10 @@ def fetch_ticker_full_analysis(ticker: str):
             is_tenbagger = mcap_ok and (rev_val and rev_val >= 0.2) and (roe_val and roe_val >= 0.15)
         except Exception:
             pass
+
+        board_breakout_imminent = (bid_ask_ratio >= 1.5) and vol_spike
+        is_dip = (rsi <= 35 or bb_oversold) and (bias25 <= -5.0)
+        is_overbought = (rsi >= 72) or (bias25 >= 15.0)
 
         return {
             "code": ticker.replace(".T", ""),
@@ -249,7 +240,6 @@ def fetch_ticker_full_analysis(ticker: str):
         return None
 
 def refresh_all_cache():
-    """全銘柄の最新データをバックグラウンドで一括更新してキャッシュ"""
     global DATA_CACHE, LAST_CACHE_TIME
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
     new_data = {}
@@ -264,22 +254,16 @@ def refresh_all_cache():
         LAST_CACHE_TIME = datetime.now(JST)
 
 def get_action_advice(tech):
-    if tech['board_breakout']:
-        return "⚡ **【過去データ対比：大口板買い集中】** 過去平均出来高を大きく上回り上放れ直前。"
-    elif tech['is_high_breakout']:
-        return "🚀 **【新高値更新】** 過去20日間の最高値を上抜け。上昇弾み到来。"
-    elif tech['is_dip']:
-        return "🟢 **【打診買い】** 過去の反発ラインに到達。売られ過ぎ。"
-    elif tech['perfect_order'] and tech['vol_spike']:
-        return "🔥 **【強気追随】** 移動平均完全配列 ＋ 過去対比の大商い。"
-    elif tech['bb_breakout']:
-        return "🚀 **【ブレイク買い / 利確準備】** +2σ突破。"
-    elif tech['is_gc'] or tech['macd_gc']:
-        return "✅ **【トレンド転換】** 過去下降トレンドからのゴールデンクロス。"
-    elif tech['is_overbought']:
-        return "🔴 **【高値警戒】** 短期的な過熱感あり。"
+    if tech['is_overbought'] or (tech['bias'] >= 20.0):
+        return "🔴 **【利確・一部売却】** 短期的な過熱感が非常に強い状態。利益確定を検討。"
+    elif tech['board_breakout'] or tech['is_high_breakout']:
+        return "🚀 **【新規買い / 買い増し】** 大口買い集中・新高値突破！トレンドに乗る買いタイミング。"
+    elif tech['is_dip'] or tech['is_gc'] or tech['macd_gc']:
+        return "🟢 **【新規買い（打診買い）】** 売られ過ぎ・上昇転換初動。打診買いに好相性。"
+    elif tech['perfect_order']:
+        return "🔥 **【ホールド（継続保有）】** 上昇トレンド継続中。利益を伸ばす場面。"
     else:
-        return "🟡 **【様子見】** 明確なシグナル待ち。"
+        return "🟡 **【ホールド / 様子見】** トレンド模索中。保有分は維持しつつ新規は様子見。"
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -296,8 +280,7 @@ def analyze_single_ticker(code_input: str):
 
         advice = get_action_advice(tech)
         gc_str = "✅ クロス発生" if (tech['is_gc'] or tech['macd_gc']) else "➖ なし"
-        po_str = "🔥 完全上昇配列" if tech['perfect_order'] else "➖ 通常"
-        vol_str = f"🔥 {tech['vol_ratio']}倍 (過去25日比急増)" if tech['vol_spike'] else f"{tech['vol_ratio']}倍"
+        vol_str = f"🔥 {tech['vol_ratio']}倍 (過去比急増)" if tech['vol_spike'] else f"{tech['vol_ratio']}倍"
 
         return (
             f"📊 **【過去データ照合・多角解析】`{code_input}`**\n"
@@ -309,7 +292,7 @@ def analyze_single_ticker(code_input: str):
             f"├ **ゴールデンクロス**: {gc_str}\n"
             f"├ **指標**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
             f"├ **総合判定**: {status_str}\n"
-            f"└ 💡 **アクション指針**: {advice}"
+            f"└ 💡 **投資判断アドバイス**: {advice}"
         )
     else:
         return f"⚠️ `{code_input}` のデータを取得できませんでした。"
@@ -338,14 +321,11 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        # 爆速キャッシュ利用（一瞬で返答）
         await interaction.response.defer(thinking=True)
         
         full_report = "📊 **【10大業界 世界ニュース・マクロ要因別 資金流入力学】**\n"
         if LAST_CACHE_TIME:
             full_report += f"⏱️ データ更新時刻: {LAST_CACHE_TIME.strftime('%H:%M:%S')}\n\n"
-        else:
-            full_report += "\n"
 
         sector_scores = {}
 
@@ -376,23 +356,22 @@ class InstitutionalBoardView(View):
 
             full_report += "> " + " | ".join(line_items) + f"\n"
             full_report += f"├ **資金流入スコア**: `{avg_score}点`\n"
-            full_report += f"└ 🧠 **背景世界ニュース・要因**: {reason_str}\n\n"
+            full_report += f"└ 🧠 **背景ニュース・要因**: {reason_str}\n\n"
 
         sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
         top_sector = sorted_sectors[0] if sorted_sectors else ("なし", 0)
         bottom_sector = sorted_sectors[-1] if sorted_sectors else ("なし", 0)
 
-        full_report += "📈 **【世界情勢・業界流入力学サマリー】**\n"
-        full_report += f"├ 🔥 **最高資金流入業界**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
-        full_report += f"├ 🔻 **最不振・調整業界**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)\n"
-        full_report += f"└ 🧭 **戦略**: 「{top_sector[0]}」への順張りニュース追随、または「{bottom_sector[0]}」の押し目狙い。"
+        full_report += "📈 **【業界動向サマリー】**\n"
+        full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
+        full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
 
         await interaction.followup.send(full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        report = "🎯 **【過去データ対比 注目シグナル抽出銘柄】**\n\n"
+        report = "🎯 **【注目シグナル抽出銘柄】**\n\n"
         found_count = 0
         for code, tech in DATA_CACHE.items():
             if tech and (tech['is_dip'] or tech['is_gc'] or tech['macd_gc'] or tech['bb_breakout'] or tech['is_high_breakout'] or tech['is_tenbagger']):
@@ -403,23 +382,22 @@ class InstitutionalBoardView(View):
                 if tech['perfect_order']: signals.append("上昇パーフェクトオーダー")
                 if tech['is_gc'] or tech['macd_gc']: signals.append("ゴールデンクロス")
                 if tech['bb_breakout']: signals.append("+2σブレイク")
-                if tech['is_tenbagger']: signals.append("10倍株財務通過")
 
                 advice = get_action_advice(tech)
                 clean_code = code.replace('.T','')
                 report += f"💡 **銘柄**: `{clean_code}` | **シグナル**: {', '.join(signals)}\n"
                 report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
+                report += f"└ 🧭 **判断**: {advice}\n\n"
         
         if found_count == 0:
-            report += "現在、過去データ対比で明確なシグナル条件に合致する銘柄はありません。"
+            report += "現在、明確なシグナル条件に合致する銘柄はありません。"
         
         await interaction.followup.send(report)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        report = "⚡ **【過去データ対比 大口買い集中・板急変分析】**\n\n"
+        report = "⚡ **【大口買い集中・板急変分析】**\n\n"
         found = False
 
         for code, tech in DATA_CACHE.items():
@@ -428,10 +406,10 @@ class InstitutionalBoardView(View):
                 advice = get_action_advice(tech)
                 report += f"🔥 **銘柄**: `{tech['code']}` | **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
                 report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **分析**: {advice}\n\n"
+                report += f"└ 🧭 **判断**: {advice}\n\n"
 
         if not found:
-            report += "現在、過去データ対比で大口の買いが急集している銘柄はありません。"
+            report += "現在、大口の買いが急増している銘柄はありません。"
 
         await interaction.followup.send(report)
 
@@ -439,16 +417,13 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 1. バックグラウンド自動監視＆キャッシュ更新（過去データ照合通知） ---
+# --- 1. バックグラウンド自動監視（「#売買アラート」へ送信） ---
 @tasks.loop(minutes=10)
 async def real_time_signal_monitor():
     await bot.wait_until_ready()
-    
-    # 1. キャッシュの更新
     await asyncio.to_thread(refresh_all_cache)
 
-    # 2. アラートチャンネルへ通知
-    channel = bot.get_channel(PANEL_CHANNEL_ID)
+    channel = bot.get_channel(ALERT_CHANNEL_ID)
     if not channel:
         return
 
@@ -462,7 +437,6 @@ async def real_time_signal_monitor():
 
         clean_code = tech['code']
         last_time = alert_history.get(clean_code)
-        # 過去3時間以内に同一銘柄で発報済みの場合は重複通知しない
         if last_time and (now - last_time).total_seconds() < 10800:
             continue
 
@@ -471,39 +445,32 @@ async def real_time_signal_monitor():
 
         if tech['board_breakout']:
             triggered = True
-            signal_title = "⚡ 【大口売買急変】過去平均を超える板買い集中＆上放れ直前"
+            signal_title = "⚡ 【大口売買急変】板買い集中＆上放れ直前"
         elif tech['is_high_breakout']:
             triggered = True
-            signal_title = "🚀 【直近高値突破】過去20日間の最高値を上抜け"
+            signal_title = "🚀 【直近高値突破】最高値を上抜け"
         elif tech['perfect_order'] and tech['vol_spike']:
             triggered = True
-            signal_title = "🔥 【大商いトレンド突入】過去対比での出来高急増＋完全上昇配列"
-        elif tech['macd_gc'] or tech['is_gc']:
-            triggered = True
-            signal_title = "✅ 【過去トレンド転換】ゴールデンクロス発生初動"
-        elif tech['is_dip']:
-            triggered = True
-            signal_title = "🎯 【過小評価・押し目】過去の主要サポート水準に到達"
+            signal_title = "🔥 【大商いトレンド】出来高急増＋完全上昇配列"
 
         if triggered:
             alert_history[clean_code] = now
             advice = get_action_advice(tech)
             
             msg = (
-                f"🚨 **【自動検知】過去データ照合・売買動作アラート** 🚨\n"
+                f"🚨 **【自動検知】売買動作アラート** 🚨\n"
                 f"📌 **{signal_title}**\n"
                 f"├ **銘柄**: `{clean_code}` | **現在値**: {tech['price']}円 ({tech['change']}%)\n"
                 f"├ **板買い圧力**: `{tech['bid_ask_ratio']}倍` | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                f"├ **RSI**: {tech['rsi']}% | **25日乖離**: {tech['bias']}%\n"
-                f"└ 🧭 **推測指針**: {advice}"
+                f"└ 🧭 **投資判断**: {advice}"
             )
             await channel.send(msg)
 
-# --- 2. 市場前後の定時レポート配信 ---
+# --- 2. 市場前後の定時レポート（「#定時レポート」へ送信） ---
 @tasks.loop(minutes=1)
 async def scheduled_market_reports():
     await bot.wait_until_ready()
-    channel = bot.get_channel(PANEL_CHANNEL_ID)
+    channel = bot.get_channel(REPORT_CHANNEL_ID)
     if not channel:
         return
 
@@ -515,45 +482,31 @@ async def scheduled_market_reports():
 
     if time_str == "08:45":
         board_candidates = [t for t in DATA_CACHE.values() if t and (t['bid_ask_ratio'] >= 1.3 or t['vol_spike'])]
-
         msg = "🌅 **【寄り付き前 気配＆世界ニュース連動チェック】**\n"
         msg += f"📅 日時: {now.strftime('%Y-%m-%d')} 08:45\n\n"
-        msg += "📊 **本日過去データ・気配比で大動きが想定される注目株:**\n"
-        
         if board_candidates:
             for t in board_candidates[:5]:
                 msg += f"├ `{t['code']}` | 板買い圧力 `{t['bid_ask_ratio']}倍` | 前日比 `{t['change']}%`\n"
         else:
             msg += "├ 特筆すべき異常気配は現在検出されていません。\n"
-            
-        msg += "\n🧭 **本日の立ち回り**: 寄付き直後の出来高急増銘柄に絞り、世界ニュースと同調する業界へ追随。"
         await channel.send(msg)
 
     if time_str == "15:30":
         tech_results = [t for t in DATA_CACHE.values() if t]
         tech_results.sort(key=lambda x: x['change'], reverse=True)
         top_gainers = tech_results[:3]
-        top_losers = tech_results[-3:]
-
-        msg = "🌇 **【大引け後 過去比較・市場総括レポート】**\n"
-        msg += f"📅 日時: {now.strftime('%Y-%m-%d')} 15:30 本日の取引終了\n\n"
-        
-        msg += "📈 **本日過去比 モメンタム上向トップ3:**\n"
+        msg = "🌇 **【大引け後 市場総括レポート】**\n"
+        msg += f"📅 日時: {now.strftime('%Y-%m-%d')} 15:30\n\n"
+        msg += "📈 **本日の上昇トップ3:**\n"
         for t in top_gainers:
-            msg += f"├ `{t['code']}`: **+{t['change']}%** (現在値: {t['price']}円 | 出来高 `{t['vol_ratio']}倍`)\n"
-            
-        msg += "\n📉 **本日調整・下落トップ3:**\n"
-        for t in top_losers:
-            msg += f"├ `{t['code']}`: **{t['change']}%** (現在値: {t['price']}円 | RSI: `{t['rsi']}%`)\n"
-
-        msg += "\n🔮 **明日以降の注目判定**: 本日過去比で大商いを伴って新高値突破した銘柄はトレンド継続傾向です。"
+            msg += f"├ `{t['code']}`: **+{t['change']}%** (現在値: {t['price']}円)\n"
         await channel.send(msg)
 
 async def send_or_move_panel(channel):
     if not channel:
         return
     try:
-        async for msg in channel.history(limit=15):
+        async for msg in channel.history(limit=10):
             if msg.author == bot.user and "常設ダッシュボード" in msg.content:
                 await msg.delete()
     except Exception:
@@ -571,11 +524,6 @@ async def send_or_move_panel(channel):
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
-    
-    target_channel = bot.get_channel(PANEL_CHANNEL_ID) if PANEL_CHANNEL_ID != 0 else None
-    if target_channel:
-        await send_or_move_panel(target_channel)
-        
     if not real_time_signal_monitor.is_running():
         real_time_signal_monitor.start()
     if not scheduled_market_reports.is_running():
