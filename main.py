@@ -32,7 +32,6 @@ def run_dummy_server():
     server.serve_forever()
 
 def keep_alive_ping():
-    """10分ごとに自分自身へアクセスしてRenderの15分スリープを回避"""
     time.sleep(30)
     service_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not service_url:
@@ -79,13 +78,13 @@ CACHE_TTL = 300  # キャッシュ 5分
 
 def get_session():
     try:
-        session = cffi_requests.Session(impersonate="chrome110")
+        session = cffi_requests.Session(impersonate="chrome120")
         return session
     except Exception:
         return None
 
 def fetch_single_ticker_data(ticker: str):
-    """テクニカルおよび財務指標を取得（フォールバック強化・N/A激減版）"""
+    """テクニカル優先・エラー安全設計の株価データ取得関数"""
     now = time.time()
     if ticker in STOCK_CACHE:
         cached_time, cached_data = STOCK_CACHE[ticker]
@@ -96,17 +95,19 @@ def fetch_single_ticker_data(ticker: str):
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
         
-        # 6ヶ月分取得して計算精度を担保
+        # 1. 株価（チャート）データを優先取得
         df = ticker_obj.history(period="6mo", interval="1d")
-        
         if df.empty or len(df['Close']) < 25:
-            return None
+            # 取得失敗時はセッションなしで再試行
+            df = yf.Ticker(ticker).history(period="6mo", interval="1d")
+            if df.empty or len(df['Close']) < 25:
+                return None
 
         close = df['Close'].dropna()
         volume = df['Volume'].dropna() if 'Volume' in df else pd.Series()
         current_price = close.iloc[-1]
         
-        # テクニカル指標計算
+        # テクニカル計算
         sma5 = close.rolling(window=5).mean()
         sma25 = close.rolling(window=25).mean()
         bias = ((current_price - sma25.iloc[-1]) / sma25.iloc[-1]) * 100 if sma25.iloc[-1] != 0 else 0
@@ -131,63 +132,24 @@ def fetch_single_ticker_data(ticker: str):
         vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
 
-        # --- 財務データ取得・フォールバック設計 ---
-        info = {}
+        # 2. 財務データ取得（エラーが発生しても無視してテクニカルのみで返すガード）
+        per, roe, revenue_growth, market_cap = None, None, None, None
         try:
             info = ticker_obj.info or {}
-        except Exception:
-            pass
+            market_cap = info.get("marketCap")
+            per = info.get("trailingPE") or info.get("forwardPE")
+            roe = info.get("returnOnEquity")
+            revenue_growth = info.get("revenueGrowth")
+        except Exception as e:
+            print(f"Info warning for {ticker}: {e}")
 
-        # 1. 時価総額
-        market_cap = info.get("marketCap")
-        if not market_cap:
-            try:
-                market_cap = getattr(ticker_obj.fast_info, 'market_cap', None)
-            except Exception:
-                pass
-
-        # 2. PER
-        per = info.get("trailingPE") or info.get("forwardPE")
-
-        # 3. ROE
-        roe = info.get("returnOnEquity")
-
-        # 4. 増収率
-        revenue_growth = info.get("revenueGrowth")
-
-        # --- 財務データの直接計算・補完（infoで取れない場合） ---
-        if roe is None or revenue_growth is None:
-            try:
-                q_fin = ticker_obj.quarterly_financials
-                if not q_fin.empty and q_fin.shape[1] >= 2:
-                    # 売上高増収率計算
-                    rev_rows = [r for r in q_fin.index if 'Total Revenue' in str(r) or 'Revenue' in str(r)]
-                    if rev_rows:
-                        rev_curr = q_fin.loc[rev_rows[0]].iloc[0]
-                        rev_prev = q_fin.loc[rev_rows[0]].iloc[1]
-                        if rev_prev and rev_prev > 0 and revenue_growth is None:
-                            revenue_growth = (rev_curr - rev_prev) / rev_prev
-
-                    # ROE試算（当期純利益 / 純資産）
-                    net_inc_rows = [r for r in q_fin.index if 'Net Income' in str(r)]
-                    bs = ticker_obj.quarterly_balance_sheet
-                    if net_inc_rows and not bs.empty:
-                        equity_rows = [r for r in bs.index if 'Stockholders Equity' in str(r) or 'Equity' in str(r)]
-                        if equity_rows:
-                            annualized_net_inc = q_fin.loc[net_inc_rows[0]].iloc[0] * 4
-                            equity = bs.loc[equity_rows[0]].iloc[0]
-                            if equity and equity > 0 and roe is None:
-                                roe = annualized_net_inc / equity
-            except Exception:
-                pass
-
-        # 10倍株判定
+        # 10倍株スクリーニング判定
         market_cap_ok = False
         if market_cap:
             if ticker.endswith(".T"):
-                market_cap_ok = (market_cap / 1e8) < 1000  # 1,000億円未満
+                market_cap_ok = (market_cap / 1e8) < 1000
             else:
-                market_cap_ok = (market_cap / 1e6) < 1000  # 10億ドル未満相当
+                market_cap_ok = (market_cap / 1e6) < 1000
 
         has_rev = (revenue_growth is not None) and (revenue_growth >= 0.20)
         has_roe = (roe is not None) and (roe >= 0.15)
