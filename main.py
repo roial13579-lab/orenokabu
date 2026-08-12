@@ -174,32 +174,41 @@ def fetch_single_ticker_data(ticker: str):
         print(f"Error fetching {ticker}: {e}")
         return None
 
+def get_action_advice(tech):
+    """共通アクション判断関数"""
+    if tech['is_dip']:
+        return "🟢 **【新規買い検討】/ 保有なら【買増し】** (自律反発狙い)"
+    elif tech['is_tenbagger'] and (tech['is_gc'] or tech['bb_breakout']):
+        return "🔥 **【強力買い推奨】** (高成長ファンダ＋上昇トレンド発生)"
+    elif tech['bb_breakout']:
+        return "🚀 **【順張り短買】/ 保有なら【利確準備】** (+2σ超えの過熱感に注意)"
+    elif tech['is_gc']:
+        return "🟢 **【打診買い検討】/ 保有なら【継続ホールド】** (トレンド転換初動)"
+    elif tech['is_overbought']:
+        return "🔴 **【新規買い見送り】/ 保有なら【売り検討】** (過熱感による押し目形成注意)"
+    else:
+        return "🟡 **【様子見】** (明確なシグナル待ち)"
+
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
     ticker = f"{code_input}.T" if code_input.isdigit() and len(code_input) == 4 else code_input
 
     tech = fetch_single_ticker_data(ticker)
     if tech:
-        # アクションアドバイスの自動判定ロジック
         if tech['is_dip']:
             status_str = "🎯 **押し目買いシグナル（売られ過ぎ）**"
-            advice_str = "🟢 **【新規買い検討】/ 既存保有なら【買い増し・ホールド】**\n└ *理由:* 25日乖離率・RSIともに売られすぎ水準。短期的な自律反発（リバウンド）を狙いやすい局面です。"
         elif tech['is_tenbagger'] and (tech['is_gc'] or tech['bb_breakout']):
             status_str = "🌟 **10倍株候補 ＋ 上昇トレンド発生**"
-            advice_str = "🔥 **【強力な買い推奨 / 上昇乗車】**\n└ *理由:* 優秀な業績・財務を背景に上昇シグナルが発生中。中長期での大化けに期待。"
         elif tech['bb_breakout']:
             status_str = "🚀 **+2σ ブレイクアウト（上昇モメンタム）**"
-            advice_str = "🚀 **【順張り（短買）検討】/ 保有なら【利確準備】**\n└ *理由:* 勢いが強い一方、過熱感も出やすいため、保有中の場合は利確ラインを引き上げてください。"
         elif tech['is_gc']:
             status_str = "✅ **ゴールデンクロス（トレンド転換）**"
-            advice_str = "🟢 **【打診買い検討】/ 保有なら【継続ホールド】**\n└ *理由:* 短期移動平均線が中期線を上抜け。下降から上昇への初期転換をとらえています。"
         elif tech['is_overbought']:
             status_str = "⚠️ **過熱警戒（買われ過ぎ）**"
-            advice_str = "🔴 **【新規買い見送り】/ 保有なら【売り検討・利益確定】**\n└ *理由:* RSIや乖離率が高水準。機関投資家の利益確定売りに押されるリスクがあります。"
         else:
             status_str = "⚡ **正常レンジ内**"
-            advice_str = "🟡 **【様子見】（トレンド発生待ち）**\n└ *理由:* 明確な売られすぎ・買われすぎのシグナルがありません。明確な転換を待ちましょう。"
 
+        advice = get_action_advice(tech)
         gc_str = "✅ 発生" if tech['is_gc'] else "➖ なし"
         bb_str = "🚀 +2σ上抜け" if tech['bb_breakout'] else "➖ 正常値"
         tb_str = "🌟 10倍株基準クリア" if tech['is_tenbagger'] else "➖ 基準外"
@@ -214,10 +223,10 @@ def analyze_single_ticker(code_input: str):
             f"├ **10倍株スクリーニング**: {tb_str}\n"
             f"├ **指標情報**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
             f"├ **判定**: {status_str}\n"
-            f"└ 💡 **アクションアドバイス**:\n{advice_str}"
+            f"└ 💡 **アクション**: {advice}"
         )
     else:
-        return f"⚠️ `{code_input}` の株価データを取得できませんでした。コードが正しいか確認の上、少し時間をおいて再試行してください。"
+        return f"⚠️ `{code_input}` の株価データを取得できませんでした。"
 
 class StockSearchModal(Modal, title="銘柄テクニカル＆10倍株判定検索"):
     stock_code = TextInput(
@@ -255,20 +264,38 @@ class InstitutionalBoardView(View):
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
         tech_data = fetch_all_technical_data()
-        full_report = "📊 **【全10セクター 資金流入力学・シグナル解析】**\n\n"
+        
+        full_report = "📊 **【全10セクター 資金流入力学・変動分析レポート】**\n\n"
+        sector_scores = {}
+
         for sector_name, tickers in SECTORS.items():
             full_report += f"**🔹 {sector_name}**\n"
             line_items = []
+            scores = []
             for code in tickers:
                 tech = tech_data.get(code)
                 clean_code = code.replace('.T','')
                 if tech:
                     score = min(max(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5) + (20 if tech['is_gc'] else 0)), 10), 100)
+                    scores.append(score)
                     status = "🔥" if score >= 65 else ("⚡" if score >= 40 else "🔻")
-                    line_items.append(f"`{clean_code}`:{status}{score}")
+                    line_items.append(f"`{clean_code}`:{status}{score}点")
                 else:
                     line_items.append(f"`{clean_code}`:取得中")
-            full_report += "> " + " | ".join(line_items) + "\n\n"
+            
+            avg_score = int(sum(scores) / len(scores)) if scores else 0
+            sector_scores[sector_name] = avg_score
+            full_report += "> " + " | ".join(line_items) + f"\n└ **セクター平均勢い**: `{avg_score}点`\n\n"
+
+        # 資金流入力学の全体分析サマリーを自動付与
+        sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
+        top_sector = sorted_sectors[0] if sorted_sectors else ("なし", 0)
+        bottom_sector = sorted_sectors[-1] if sorted_sectors else ("なし", 0)
+
+        full_report += "📈 **【業界全体の資金変動・市場センチメント分析】**\n"
+        full_report += f"├ 🔥 **資金集中セクター**: **{top_sector[0]}** (平均 `{top_sector[1]}点`)\n"
+        full_report += f"├ 🔻 **資金停滞セクター**: **{bottom_sector[0]}** (平均 `{bottom_sector[1]}点`)\n"
+        full_report += f"└ 💡 **立ち回り指針**: 最も勢いのある上位セクターへの「トレンドフォロー（買）」か、停滞セクターからの「売られすぎ反発」に注目するのが効果的です。\n"
 
         await interaction.followup.send(full_report)
         await send_or_move_panel(interaction.channel)
@@ -277,7 +304,7 @@ class InstitutionalBoardView(View):
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
         tech_data = fetch_all_technical_data()
-        report = "🎯 **【注目銘柄・テクニカル＋大化けシグナル抽出レポート】**\n\n"
+        report = "🎯 **【注目銘柄・テクニカル＋大化けシグナル抽出・売買アクション】**\n\n"
         found_count = 0
         for code, tech in tech_data.items():
             if tech and (tech['is_dip'] or tech['is_gc'] or tech['bb_breakout'] or tech['is_tenbagger']):
@@ -288,9 +315,12 @@ class InstitutionalBoardView(View):
                 if tech['bb_breakout']: signals.append("+2σブレイクアウト")
                 if tech['is_tenbagger']: signals.append("10倍株財務クリア")
 
-                report += f"💡 **銘柄**: `{code}` | **検出**: {', '.join(signals)}\n"
-                report += f"├ **現在値**: {tech['price']}円 / **25日乖離**: {tech['bias']}%\n"
-                report += f"└ **RSI**: {tech['rsi']}% | **PER**: {tech['per']}倍 | **ROE**: {tech['roe']}%\n\n"
+                advice = get_action_advice(tech)
+                clean_code = code.replace('.T','')
+
+                report += f"💡 **銘柄**: `{clean_code}` | **検出**: {', '.join(signals)}\n"
+                report += f"├ **現在値**: {tech['price']}円 | **25日乖離**: {tech['bias']}% | **RSI**: {tech['rsi']}%\n"
+                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
         
         if found_count == 0:
             report += "現在、シグナル条件に合致する注目銘柄はありません。"
