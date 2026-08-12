@@ -266,8 +266,12 @@ def get_action_advice(tech):
     else:
         return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
 
-# ★必ず「#一般」チャンネルへ送信し、ダッシュボードには何も残さない送信関数
+# ★ダッシュボードには一切メッセージを出さず、指定した「#一般」チャンネルのみに送信する
 async def send_to_general_channel(interaction: discord.Interaction, full_text: str):
+    # まずボタンを押したインタラクションをサイレントに完了させる（これで返信線が出なくなります）
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+
     target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else interaction.channel
 
     chunks = []
@@ -283,15 +287,6 @@ async def send_to_general_channel(interaction: discord.Interaction, full_text: s
 
     for chunk in chunks:
         await target_channel.send(chunk)
-
-    # ダッシュボード内には何もスレッドやメッセージを残さず、一時的なポップアップだけ表示
-    channel_mention = target_channel.mention if hasattr(target_channel, 'mention') else "一般"
-    msg = f"✅ {channel_mention} チャンネルに解析結果を送信しました！"
-    
-    if interaction.response.is_done():
-        await interaction.followup.send(msg, ephemeral=True)
-    else:
-        await interaction.response.send_message(msg, ephemeral=True)
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -332,8 +327,6 @@ class StockSearchModal(Modal, title="銘柄テクニカル＆板情報検索"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # モーダル送信時も即座に defer して応答状態を作る
-        await interaction.response.defer(ephemeral=True)
         res_msg = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
         await send_to_general_channel(interaction, res_msg)
 
@@ -347,9 +340,6 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        # ダッシュボード上に返信メッセージを残さない処理
-        await send_to_general_channel(interaction, "⏳ 各業界の資金動向を取得中です...（少々お待ちください）")
-        
         full_report = "📊 **【10大業界 世界ニュース・マクロ要因別 資金流入力学】**\n"
         if LAST_CACHE_TIME:
             full_report += f"⏱️ データ更新時刻: {LAST_CACHE_TIME.strftime('%H:%M:%S')}\n\n"
@@ -393,9 +383,7 @@ class InstitutionalBoardView(View):
         full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
         full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
 
-        # 一般チャンネルに送信
-        target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else interaction.channel
-        await target_channel.send(full_report)
+        await send_to_general_channel(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
