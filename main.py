@@ -59,12 +59,13 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot 設定 ---
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg")
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN", os.environ.get("TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg"))
 
 # チャンネルIDの設定
 DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "1537090733490835498")))
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090824834261122"))
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090877003014226"))
+GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "1535613064056152247"))  # 一般チャンネル
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))      # 売買アラート
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))    # 定時レポート
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -266,8 +267,11 @@ def get_action_advice(tech):
     else:
         return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
 
-# ★2000文字を超えるメッセージを自動で分割送信するヘパー関数
-async def send_split_message(interaction: discord.Interaction, full_text: str):
+# ★必ず「#一般」チャンネルへ送信するためのヘルパー関数
+async def send_to_general_channel(interaction: discord.Interaction, full_text: str):
+    # 送信先の「一般」チャンネルを取得
+    target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else interaction.channel
+
     chunks = []
     curr_chunk = ""
     for line in full_text.split("\n"):
@@ -279,11 +283,13 @@ async def send_split_message(interaction: discord.Interaction, full_text: str):
     if curr_chunk:
         chunks.append(curr_chunk)
 
-    for i, chunk in enumerate(chunks):
-        if i == 0:
-            await interaction.followup.send(chunk)
-        else:
-            await interaction.channel.send(chunk)
+    # 一般チャンネルへメッセージを分割送信
+    for chunk in chunks:
+        await target_channel.send(chunk)
+
+    # ダッシュボード上で押したユーザーには、自分だけに見えるメッセージで完了通知
+    channel_mention = target_channel.mention if hasattr(target_channel, 'mention') else "一般"
+    await interaction.followup.send(f"✅ {channel_mention} チャンネルに解析結果を送信しました！", ephemeral=True)
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -324,9 +330,9 @@ class StockSearchModal(Modal, title="銘柄テクニカル＆板情報検索"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(ephemeral=True)
         res_msg = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
-        await send_split_message(interaction, res_msg)
+        await send_to_general_channel(interaction, res_msg)
 
 class InstitutionalBoardView(View):
     def __init__(self):
@@ -338,7 +344,7 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(ephemeral=True)
         
         full_report = "📊 **【10大業界 世界ニュース・マクロ要因別 資金流入力学】**\n"
         if LAST_CACHE_TIME:
@@ -383,11 +389,11 @@ class InstitutionalBoardView(View):
         full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
         full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
 
-        await send_split_message(interaction, full_report)
+        await send_to_general_channel(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(ephemeral=True)
         report = "🎯 **【過去データ対比 注目シグナル抽出銘柄】**\n\n"
         found_count = 0
         for code, tech in DATA_CACHE.items():
@@ -409,11 +415,11 @@ class InstitutionalBoardView(View):
         if found_count == 0:
             report += "現在、明確なシグナル条件に合致する銘柄はありません。"
         
-        await send_split_message(interaction, report)
+        await send_to_general_channel(interaction, report)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(ephemeral=True)
         report = "⚡ **【大口買い集中・板急変分析】**\n\n"
         found = False
 
@@ -428,13 +434,13 @@ class InstitutionalBoardView(View):
         if not found:
             report += "現在、大口の買いが急増している銘柄はありません。"
 
-        await send_split_message(interaction, report)
+        await send_to_general_channel(interaction, report)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- パネルの自動移動/更新関数 ---
+# --- パネルの自動固定関数 ---
 async def ensure_dashboard_panel():
     if not DASHBOARD_CHANNEL_ID:
         return
@@ -442,17 +448,16 @@ async def ensure_dashboard_panel():
     if not channel:
         return
     try:
-        async for msg in channel.history(limit=10):
-            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
-                await msg.delete()
+        # ダッシュボード内の全メッセージをクリアしてボタンのみ再構築
+        await channel.purge(limit=20)
     except Exception:
         pass
 
     view = InstitutionalBoardView()
     await channel.send(
         "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
-        "ボタンを押すと、過去データ対比や世界ニュース連動分析を**一瞬**で返答します。\n"
-        "※ `🔍 銘柄詳細解析` ボタンを押すか、`!c 銘柄コード` で個別検索も可能です。",
+        "ボタンを押すと、最新の解析結果が **#一般** チャンネルへ送信されます。\n"
+        "※ `🔍 銘柄詳細解析` ボタンで個別検索も可能です。",
         view=view
     )
 
@@ -573,7 +578,8 @@ async def on_message(message):
         if len(parts) >= 2:
             async with message.channel.typing():
                 res_msg = await asyncio.to_thread(analyze_single_ticker, parts[1])
-                await message.channel.send(res_msg)
+                target_channel = bot.get_channel(GENERAL_CHANNEL_ID) if GENERAL_CHANNEL_ID else message.channel
+                await target_channel.send(res_msg)
         return
 
     await bot.process_commands(message)
