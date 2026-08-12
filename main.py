@@ -24,7 +24,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # ログ出力で画面が埋まるのを防止
+        pass
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", "10000"))
@@ -32,13 +32,9 @@ def run_dummy_server():
     server.serve_forever()
 
 def keep_alive_ping():
-    """10分ごとに自分自身（または外部URL）へアクセスしてRenderの15分スリープを回避"""
-    time.sleep(30)  # 起動直後の待ち時間
-    
-    # Renderの環境変数「RENDER_EXTERNAL_URL」を自動取得（手動で自サーバーURLを指定も可能）
+    """10分ごとに自分自身へアクセスしてRenderの15分スリープを回避"""
+    time.sleep(30)
     service_url = os.environ.get("RENDER_EXTERNAL_URL")
-    
-    # 環境変数が取れない場合のローカル（または直接URL指定）のフォールバック
     if not service_url:
         port = os.environ.get("PORT", "10000")
         service_url = f"http://127.0.0.1:{port}"
@@ -56,11 +52,8 @@ def keep_alive_ping():
             print(f"⏰ [Keep-Alive] Ping sent to {service_url} - Status: 200 OK")
         except Exception as e:
             print(f"⚠️ [Keep-Alive] Ping failed: {e}")
-        
-        # 10分（600秒）ごとに実行（15分ルールを余裕を持ってクリア）
         time.sleep(600)
 
-# スレッドを起動して並行実行
 threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
@@ -92,7 +85,7 @@ def get_session():
         return None
 
 def fetch_single_ticker_data(ticker: str):
-    """テクニカル（価格・MA・RSI・ボリンジャーバンド）とファンダメンタルズを取得"""
+    """テクニカルおよび財務指標を取得（フォールバック強化・N/A激減版）"""
     now = time.time()
     if ticker in STOCK_CACHE:
         cached_time, cached_data = STOCK_CACHE[ticker]
@@ -102,26 +95,32 @@ def fetch_single_ticker_data(ticker: str):
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
-        df = ticker_obj.history(period="3mo", interval="1d")
+        
+        # 6ヶ月分取得して計算精度を担保
+        df = ticker_obj.history(period="6mo", interval="1d")
         
         if df.empty or len(df['Close']) < 25:
             return None
 
         close = df['Close'].dropna()
         volume = df['Volume'].dropna() if 'Volume' in df else pd.Series()
-
         current_price = close.iloc[-1]
         
+        # テクニカル指標計算
         sma5 = close.rolling(window=5).mean()
         sma25 = close.rolling(window=25).mean()
-        
         bias = ((current_price - sma25.iloc[-1]) / sma25.iloc[-1]) * 100 if sma25.iloc[-1] != 0 else 0
 
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss if loss.iloc[-1] != 0 else pd.Series([1])
-        rsi = 100 - (100 / (1 + rs.iloc[-1])) if not rs.empty else 50
+        
+        last_loss = loss.iloc[-1] if not loss.empty else 0
+        if last_loss == 0:
+            rsi = 100.0
+        else:
+            rs = gain.iloc[-1] / last_loss
+            rsi = 100 - (100 / (1 + rs))
 
         is_gc = (sma5.iloc[-2] <= sma25.iloc[-2]) and (sma5.iloc[-1] > sma25.iloc[-1])
 
@@ -132,24 +131,69 @@ def fetch_single_ticker_data(ticker: str):
         vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
 
+        # --- 財務データ取得・フォールバック設計 ---
         info = {}
         try:
             info = ticker_obj.info or {}
         except Exception:
             pass
 
-        market_cap_ok = (info.get("marketCap", 0) / 1e8) < 1000 if info.get("marketCap") else False
-        revenue_growth = info.get("revenueGrowth", 0)
-        roe = info.get("returnOnEquity", 0)
-        per = info.get("trailingPE", 0) or info.get("forwardPE", 0)
+        # 1. 時価総額
+        market_cap = info.get("marketCap")
+        if not market_cap:
+            try:
+                market_cap = getattr(ticker_obj.fast_info, 'market_cap', None)
+            except Exception:
+                pass
 
-        is_tenbagger_candidate = (
-            market_cap_ok and 
-            (revenue_growth and revenue_growth >= 0.20) and 
-            (roe and roe >= 0.15) and 
-            (per and per < 100)
-        )
+        # 2. PER
+        per = info.get("trailingPE") or info.get("forwardPE")
 
+        # 3. ROE
+        roe = info.get("returnOnEquity")
+
+        # 4. 増収率
+        revenue_growth = info.get("revenueGrowth")
+
+        # --- 財務データの直接計算・補完（infoで取れない場合） ---
+        if roe is None or revenue_growth is None:
+            try:
+                q_fin = ticker_obj.quarterly_financials
+                if not q_fin.empty and q_fin.shape[1] >= 2:
+                    # 売上高増収率計算
+                    rev_rows = [r for r in q_fin.index if 'Total Revenue' in str(r) or 'Revenue' in str(r)]
+                    if rev_rows:
+                        rev_curr = q_fin.loc[rev_rows[0]].iloc[0]
+                        rev_prev = q_fin.loc[rev_rows[0]].iloc[1]
+                        if rev_prev and rev_prev > 0 and revenue_growth is None:
+                            revenue_growth = (rev_curr - rev_prev) / rev_prev
+
+                    # ROE試算（当期純利益 / 純資産）
+                    net_inc_rows = [r for r in q_fin.index if 'Net Income' in str(r)]
+                    bs = ticker_obj.quarterly_balance_sheet
+                    if net_inc_rows and not bs.empty:
+                        equity_rows = [r for r in bs.index if 'Stockholders Equity' in str(r) or 'Equity' in str(r)]
+                        if equity_rows:
+                            annualized_net_inc = q_fin.loc[net_inc_rows[0]].iloc[0] * 4
+                            equity = bs.loc[equity_rows[0]].iloc[0]
+                            if equity and equity > 0 and roe is None:
+                                roe = annualized_net_inc / equity
+            except Exception:
+                pass
+
+        # 10倍株判定
+        market_cap_ok = False
+        if market_cap:
+            if ticker.endswith(".T"):
+                market_cap_ok = (market_cap / 1e8) < 1000  # 1,000億円未満
+            else:
+                market_cap_ok = (market_cap / 1e6) < 1000  # 10億ドル未満相当
+
+        has_rev = (revenue_growth is not None) and (revenue_growth >= 0.20)
+        has_roe = (roe is not None) and (roe >= 0.15)
+        has_per = (per is not None) and (0 < per < 100)
+
+        is_tenbagger_candidate = market_cap_ok and has_rev and has_roe and has_per
         is_dip = (rsi <= 35) and (bias <= -5.0)
 
         result = {
@@ -200,7 +244,7 @@ def analyze_single_ticker(code_input: str):
 class StockSearchModal(Modal, title="銘柄テクニカル＆10倍株判定検索"):
     stock_code = TextInput(
         label="銘柄コード または ティッカーを入力",
-        placeholder="例: 7011, 8035, 4052, NVDA",
+        placeholder="例: 7011, 8035, 3905, NVDA",
         min_length=1,
         max_length=10,
         required=True
@@ -341,5 +385,4 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Bot起動
 bot.run(TOKEN)
