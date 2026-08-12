@@ -61,10 +61,10 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # --- Discord Bot 設定 ---
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg")
 
-# ★チャンネルIDの設定（Render環境変数より取得）
+# チャンネルIDの設定
 DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "1537090733490835498")))
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090824834261122"))
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090877003014226"))
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -254,7 +254,6 @@ def refresh_all_cache():
         DATA_CACHE = new_data
         LAST_CACHE_TIME = datetime.now(JST)
 
-# ★明確なアクション指針（投資判断）を出力する関数
 def get_action_advice(tech):
     if tech['is_overbought'] or (tech['bias'] >= 18.0):
         return "🔴 **【利確・一部売却】** 高値過熱感あり。利益確定売りや押し目待ちを推奨。"
@@ -266,6 +265,25 @@ def get_action_advice(tech):
         return "🔥 **【ホールド（継続保有）】** パーフェクトオーダー形成中。利益伸長を狙い維持。"
     else:
         return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
+
+# ★2000文字を超えるメッセージを自動で分割送信するヘパー関数
+async def send_split_message(interaction: discord.Interaction, full_text: str):
+    chunks = []
+    curr_chunk = ""
+    for line in full_text.split("\n"):
+        if len(curr_chunk) + len(line) + 1 > 1900:
+            chunks.append(curr_chunk)
+            curr_chunk = line + "\n"
+        else:
+            curr_chunk += line + "\n"
+    if curr_chunk:
+        chunks.append(curr_chunk)
+
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            await interaction.followup.send(chunk)
+        else:
+            await interaction.channel.send(chunk)
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -308,7 +326,7 @@ class StockSearchModal(Modal, title="銘柄テクニカル＆板情報検索"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
         res_msg = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
-        await interaction.followup.send(res_msg)
+        await send_split_message(interaction, res_msg)
 
 class InstitutionalBoardView(View):
     def __init__(self):
@@ -365,7 +383,7 @@ class InstitutionalBoardView(View):
         full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
         full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
 
-        await interaction.followup.send(full_report)
+        await send_split_message(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
@@ -391,7 +409,7 @@ class InstitutionalBoardView(View):
         if found_count == 0:
             report += "現在、明確なシグナル条件に合致する銘柄はありません。"
         
-        await interaction.followup.send(report)
+        await send_split_message(interaction, report)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
@@ -410,7 +428,7 @@ class InstitutionalBoardView(View):
         if not found:
             report += "現在、大口の買いが急増している銘柄はありません。"
 
-        await interaction.followup.send(report)
+        await send_split_message(interaction, report)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -527,7 +545,7 @@ async def scheduled_market_reports():
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
-    await ensure_dashboard_panel()  # 起動時にダッシュボードパネルを自動配置
+    await ensure_dashboard_panel()
     if not real_time_signal_monitor.is_running():
         real_time_signal_monitor.start()
     if not scheduled_market_reports.is_running():
