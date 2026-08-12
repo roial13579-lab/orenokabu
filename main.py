@@ -61,9 +61,10 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # --- Discord Bot 設定 ---
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 
-# ★チャンネルIDの設定（Renderの環境変数から取得、未設定時はフォールバック）
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))   # #売買アラート のID
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122")) # #定時レポート のID
+# ★チャンネルIDの設定（Render環境変数より取得）
+DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "1537090733490835498")))
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -209,8 +210,8 @@ def fetch_ticker_full_analysis(ticker: str):
             pass
 
         board_breakout_imminent = (bid_ask_ratio >= 1.5) and vol_spike
-        is_dip = (rsi <= 35 or bb_oversold) and (bias25 <= -5.0)
-        is_overbought = (rsi >= 72) or (bias25 >= 15.0)
+        is_dip = (rsi <= 38 or bb_oversold) or (bias25 <= -5.0)
+        is_overbought = (rsi >= 70) or (bias25 >= 15.0)
 
         return {
             "code": ticker.replace(".T", ""),
@@ -253,17 +254,18 @@ def refresh_all_cache():
         DATA_CACHE = new_data
         LAST_CACHE_TIME = datetime.now(JST)
 
+# ★明確なアクション指針（投資判断）を出力する関数
 def get_action_advice(tech):
-    if tech['is_overbought'] or (tech['bias'] >= 20.0):
-        return "🔴 **【利確・一部売却】** 短期的な過熱感が非常に強い状態。利益確定を検討。"
+    if tech['is_overbought'] or (tech['bias'] >= 18.0):
+        return "🔴 **【利確・一部売却】** 高値過熱感あり。利益確定売りや押し目待ちを推奨。"
     elif tech['board_breakout'] or tech['is_high_breakout']:
-        return "🚀 **【新規買い / 買い増し】** 大口買い集中・新高値突破！トレンドに乗る買いタイミング。"
+        return "🚀 **【新規買い / 買い増し】** 大口買い上昇ブレイク！順張りエントリー好好機。"
     elif tech['is_dip'] or tech['is_gc'] or tech['macd_gc']:
-        return "🟢 **【新規買い（打診買い）】** 売られ過ぎ・上昇転換初動。打診買いに好相性。"
+        return "🟢 **【新規買い（打診買い）】** 売られ過ぎ反発・トレンド転換初動。買い場到来。"
     elif tech['perfect_order']:
-        return "🔥 **【ホールド（継続保有）】** 上昇トレンド継続中。利益を伸ばす場面。"
+        return "🔥 **【ホールド（継続保有）】** パーフェクトオーダー形成中。利益伸長を狙い維持。"
     else:
-        return "🟡 **【ホールド / 様子見】** トレンド模索中。保有分は維持しつつ新規は様子見。"
+        return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -271,28 +273,25 @@ def analyze_single_ticker(code_input: str):
     tech = fetch_ticker_full_analysis(ticker)
     if tech:
         status_str = "⚡ レンジ推移"
-        if tech['board_breakout']: status_str = "⚡ **過去対比・大口板買い集中**"
-        elif tech['is_high_breakout']: status_str = "🚀 **直近20日高値ブレイクアウト**"
+        if tech['board_breakout']: status_str = "⚡ **大口買い集中・板上放れ**"
+        elif tech['is_high_breakout']: status_str = "🚀 **直近20日高値ブレイク**"
         elif tech['is_dip']: status_str = "🎯 **過小評価・押し目シグナル**"
         elif tech['perfect_order'] and tech['vol_spike']: status_str = "🔥 **大商い・上昇パーフェクトオーダー**"
-        elif tech['bb_breakout']: status_str = "🚀 **ボリンジャー+2σブレイク**"
-        elif tech['is_gc'] or tech['macd_gc']: status_str = "✅ **トレンド転換ゴールデンクロス**"
+        elif tech['bb_breakout']: status_str = "🚀 **ボリンジャー+2σ突破**"
+        elif tech['is_gc'] or tech['macd_gc']: status_str = "✅ **ゴールデンクロス**"
 
         advice = get_action_advice(tech)
         gc_str = "✅ クロス発生" if (tech['is_gc'] or tech['macd_gc']) else "➖ なし"
-        vol_str = f"🔥 {tech['vol_ratio']}倍 (過去比急増)" if tech['vol_spike'] else f"{tech['vol_ratio']}倍"
+        vol_str = f"🔥 {tech['vol_ratio']}倍 (急増)" if tech['vol_spike'] else f"{tech['vol_ratio']}倍"
 
         return (
-            f"📊 **【過去データ照合・多角解析】`{code_input}`**\n"
+            f"📊 **【テクニカル・板解析】`{code_input}`**\n"
             f"├ **現在値**: {tech['price']}円 ({tech['change']}%)\n"
-            f"├ **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
-            f"├ **25日移動平均乖離**: {tech['bias']}%\n"
-            f"├ **出来高（過去比）**: {vol_str}\n"
-            f"├ **RSI(14日)**: {tech['rsi']}%\n"
-            f"├ **ゴールデンクロス**: {gc_str}\n"
+            f"├ **板買い圧力**: `{tech['bid_ask_ratio']}倍` | **出来高比**: {vol_str}\n"
+            f"├ **25日移動平均乖離**: {tech['bias']}% | **RSI**: {tech['rsi']}%\n"
+            f"├ **シグナル**: {status_str} (GC: {gc_str})\n"
             f"├ **指標**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
-            f"├ **総合判定**: {status_str}\n"
-            f"└ 💡 **投資判断アドバイス**: {advice}"
+            f"└ 💡 **アクション指針**: {advice}"
         )
     else:
         return f"⚠️ `{code_input}` のデータを取得できませんでした。"
@@ -341,7 +340,7 @@ class InstitutionalBoardView(View):
                         (tech['vol_ratio'] * 25) + 
                         (tech['rsi'] * 0.4) + 
                         (15 if tech['is_gc'] or tech['macd_gc'] else 0) +
-                        (15 if tech['perfect_order'] else 0)
+                        (15 if tech['is_high_breakout'] else 0)
                     ), 10), 100)
                     scores.append(score)
                     status = "🔥" if score >= 65 else ("⚡" if score >= 40 else "🔻")
@@ -371,7 +370,7 @@ class InstitutionalBoardView(View):
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
-        report = "🎯 **【注目シグナル抽出銘柄】**\n\n"
+        report = "🎯 **【過去データ対比 注目シグナル抽出銘柄】**\n\n"
         found_count = 0
         for code, tech in DATA_CACHE.items():
             if tech and (tech['is_dip'] or tech['is_gc'] or tech['macd_gc'] or tech['bb_breakout'] or tech['is_high_breakout'] or tech['is_tenbagger']):
@@ -387,7 +386,7 @@ class InstitutionalBoardView(View):
                 clean_code = code.replace('.T','')
                 report += f"💡 **銘柄**: `{clean_code}` | **シグナル**: {', '.join(signals)}\n"
                 report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **判断**: {advice}\n\n"
+                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
         
         if found_count == 0:
             report += "現在、明確なシグナル条件に合致する銘柄はありません。"
@@ -401,12 +400,12 @@ class InstitutionalBoardView(View):
         found = False
 
         for code, tech in DATA_CACHE.items():
-            if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.4 or tech['vol_spike']):
+            if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.3 or tech['vol_spike']):
                 found = True
                 advice = get_action_advice(tech)
                 report += f"🔥 **銘柄**: `{tech['code']}` | **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
                 report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **判断**: {advice}\n\n"
+                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
 
         if not found:
             report += "現在、大口の買いが急増している銘柄はありません。"
@@ -417,7 +416,29 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 1. バックグラウンド自動監視（「#売買アラート」へ送信） ---
+# --- パネルの自動移動/更新関数 ---
+async def ensure_dashboard_panel():
+    if not DASHBOARD_CHANNEL_ID:
+        return
+    channel = bot.get_channel(DASHBOARD_CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        async for msg in channel.history(limit=10):
+            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
+                await msg.delete()
+    except Exception:
+        pass
+
+    view = InstitutionalBoardView()
+    await channel.send(
+        "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
+        "ボタンを押すと、過去データ対比や世界ニュース連動分析を**一瞬**で返答します。\n"
+        "※ `🔍 銘柄詳細解析` ボタンを押すか、`!c 銘柄コード` で個別検索も可能です。",
+        view=view
+    )
+
+# --- バックグラウンド監視（「#売買アラート」へ送信） ---
 @tasks.loop(minutes=10)
 async def real_time_signal_monitor():
     await bot.wait_until_ready()
@@ -462,11 +483,11 @@ async def real_time_signal_monitor():
                 f"📌 **{signal_title}**\n"
                 f"├ **銘柄**: `{clean_code}` | **現在値**: {tech['price']}円 ({tech['change']}%)\n"
                 f"├ **板買い圧力**: `{tech['bid_ask_ratio']}倍` | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                f"└ 🧭 **投資判断**: {advice}"
+                f"└ 🧭 **アクション指針**: {advice}"
             )
             await channel.send(msg)
 
-# --- 2. 市場前後の定時レポート（「#定時レポート」へ送信） ---
+# --- 市場前後の定時レポート（「#定時レポート」へ送信） ---
 @tasks.loop(minutes=1)
 async def scheduled_market_reports():
     await bot.wait_until_ready()
@@ -502,32 +523,21 @@ async def scheduled_market_reports():
             msg += f"├ `{t['code']}`: **+{t['change']}%** (現在値: {t['price']}円)\n"
         await channel.send(msg)
 
-async def send_or_move_panel(channel):
-    if not channel:
-        return
-    try:
-        async for msg in channel.history(limit=10):
-            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
-                await msg.delete()
-    except Exception:
-        pass
-
-    view = InstitutionalBoardView()
-    await channel.send(
-        "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
-        "ボタンを押すと、過去データ対比や世界ニュース連動分析を**一瞬**で返答します。\n"
-        "※ `🔍 銘柄詳細解析` ボタンを押すか、`!c 銘柄コード` で個別検索も可能です。",
-        view=view
-    )
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
+    await ensure_dashboard_panel()  # 起動時にダッシュボードパネルを自動配置
     if not real_time_signal_monitor.is_running():
         real_time_signal_monitor.start()
     if not scheduled_market_reports.is_running():
         scheduled_market_reports.start()
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
 
 @bot.event
 async def on_message(message):
@@ -537,7 +547,7 @@ async def on_message(message):
     text = message.content.strip()
 
     if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
-        await send_or_move_panel(message.channel)
+        await ensure_dashboard_panel()
         return
 
     if text.startswith("!c ") or text.startswith("!check "):
