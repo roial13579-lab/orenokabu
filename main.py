@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import urllib.request
+import asyncio
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
@@ -74,7 +75,6 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-# 二重通知防止用キャッシュ (code -> last_alert_time)
 alert_history = {}
 
 def get_session():
@@ -84,7 +84,7 @@ def get_session():
         return None
 
 def fetch_ticker_full_analysis(ticker: str):
-    """テクニカル罫線 ＋ 板情報（気配値バランス）の常時解析"""
+    """同期的に単一銘柄のデータ取得・解析を行う"""
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
@@ -101,7 +101,6 @@ def fetch_ticker_full_analysis(ticker: str):
         prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
         day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
 
-        # 移動平均
         sma5 = close.rolling(window=5).mean()
         sma25 = close.rolling(window=25).mean()
         sma75 = close.rolling(window=75).mean() if len(close) >= 75 else sma25
@@ -110,34 +109,28 @@ def fetch_ticker_full_analysis(ticker: str):
         perfect_order = (sma5.iloc[-1] > sma25.iloc[-1]) and (sma25.iloc[-1] > sma75.iloc[-1])
         is_gc = (sma5.iloc[-2] <= sma25.iloc[-2]) and (sma5.iloc[-1] > sma25.iloc[-1])
 
-        # RSI
         delta = close.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         last_loss = loss.iloc[-1] if not loss.empty else 0
         rsi = round(100.0 if last_loss == 0 else 100 - (100 / (1 + (gain.iloc[-1] / last_loss))), 1)
 
-        # MACD
         exp12 = close.ewm(span=12, adjust=False).mean()
         exp26 = close.ewm(span=26, adjust=False).mean()
         macd = exp12 - exp26
         signal = macd.ewm(span=9, adjust=False).mean()
         macd_gc = (macd.iloc[-2] <= signal.iloc[-2]) and (macd.iloc[-1] > signal.iloc[-1])
 
-        # ボリンジャーバンド
         std25 = close.rolling(window=25).std()
         upper_band = sma25 + (std25 * 2)
         lower_band = sma25 - (std25 * 2)
         bb_breakout = current_price > upper_band.iloc[-1]
         bb_oversold = current_price < lower_band.iloc[-1]
 
-        # 出来高
         vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = round((volume.iloc[-1] / vol_ma), 2) if vol_ma > 0 else 1.0
         vol_spike = vol_ratio >= 1.8
 
-        # --- 板情報（気配値 / Order Book）の疑似解析・強度テスト ---
-        # yfinance/エミュレーションから買気配・売気配の厚み比率を判定
         bid_ask_ratio = 1.0
         try:
             info = ticker_obj.info or {}
@@ -146,15 +139,11 @@ def fetch_ticker_full_analysis(ticker: str):
             if bid and ask and ask > 0:
                 bid_ask_ratio = round(bid / ask, 2)
             else:
-                # 代替指標：前日出来高と本日リアルタイム出来高勢いから板の買い圧力を推定
                 bid_ask_ratio = round(vol_ratio * (1.2 if current_price > prev_price else 0.8), 2)
         except Exception:
             pass
 
-        # 大動き（ブレイクアウト）兆候判定
-        # 板の買い圧力が強い（bid_ask_ratio > 1.5）かつ出来高急増
         board_breakout_imminent = (bid_ask_ratio >= 1.5) and vol_spike
-
         is_dip = (rsi <= 35 or bb_oversold) and (bias25 <= -5.0)
         is_overbought = (rsi >= 72) or (bias25 >= 15.0)
 
@@ -200,7 +189,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 1. バックグラウンド常時監視・即時シグナル発報タスク ---
+# --- 1. バックグラウンド非同期監視 ---
 @tasks.loop(minutes=10)
 async def real_time_signal_monitor():
     await bot.wait_until_ready()
@@ -209,23 +198,21 @@ async def real_time_signal_monitor():
         return
 
     now = datetime.now(JST)
-    # 平日 09:00 - 15:30 の取引時間内を中心にチェック
     if now.weekday() >= 5:
         return
 
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
     for code in all_tickers:
-        tech = fetch_ticker_full_analysis(code)
+        # 非同期化によりメインループを阻害しない
+        tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
         if not tech:
             continue
 
         clean_code = tech['code']
-        # 二重発報防止 (過去3時間以内に同一銘柄で発報済ならスキップ)
         last_time = alert_history.get(clean_code)
         if last_time and (now - last_time).total_seconds() < 10800:
             continue
 
-        # シグナル判定
         triggered = False
         signal_title = ""
 
@@ -255,9 +242,9 @@ async def real_time_signal_monitor():
                 f"└ 🧭 **推奨アクション**: {advice}"
             )
             await channel.send(msg)
-        time.sleep(0.1)
+        await asyncio.sleep(0.1)
 
-# --- 2. 市場の始まり（寄付き前）と終わり（大引け後）の評価レポート ---
+# --- 2. 市場前後の定時レポート配信 ---
 @tasks.loop(minutes=1)
 async def scheduled_market_reports():
     await bot.wait_until_ready()
@@ -266,17 +253,16 @@ async def scheduled_market_reports():
         return
 
     now = datetime.now(JST)
-    if now.weekday() >= 5: # 土日はスキップ
+    if now.weekday() >= 5:
         return
 
     time_str = now.strftime("%H:%M")
 
-    # 🌅 寄付き前レポート (08:45 JST)
     if time_str == "08:45":
         all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
         board_candidates = []
         for code in all_tickers:
-            tech = fetch_ticker_full_analysis(code)
+            tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
             if tech and (tech['bid_ask_ratio'] >= 1.3 or tech['vol_spike']):
                 board_candidates.append(tech)
 
@@ -293,16 +279,14 @@ async def scheduled_market_reports():
         msg += "\n🧭 **本日の立ち回り**: 寄付き直後の出来高急増銘柄に絞り、板の売り圧力が薄い方向への順張りが有効です。"
         await channel.send(msg)
 
-    # 🌇 大引け後総合評価レポート (15:30 JST)
     if time_str == "15:30":
         all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
         tech_results = []
         for code in all_tickers:
-            tech = fetch_ticker_full_analysis(code)
+            tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
             if tech:
                 tech_results.append(tech)
 
-        # 株価上昇率ランキング
         tech_results.sort(key=lambda x: x['change'], reverse=True)
         top_gainers = tech_results[:3]
         top_losers = tech_results[-3:]
@@ -321,20 +305,23 @@ async def scheduled_market_reports():
         msg += "\n🔮 **明日以降の注目判定**: 本日出来高を伴って+2σを突破した銘柄はトレンド継続、RSI30以下の銘柄はリバウンド狙いの買い候補となります。"
         await channel.send(msg)
 
-# --- Discord Panel & Buttons ---
+# --- Discord ボタン操作 (タイムアウト完全回避仕様) ---
 class InstitutionalBoardView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="⚡ 板情報＆大動き動向分析", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
+        # 1. 最初に即時応答（defer）を行い、Discordに処理中であることを伝えて3秒タイムアウトを回避
         await interaction.response.defer(thinking=True)
+        
         all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
         report = "⚡ **【リアルタイム板情報・大口買い圧ブレイク分析】**\n\n"
         found = False
 
         for code in all_tickers:
-            tech = fetch_ticker_full_analysis(code)
+            # 2. 通信・データ計算処理をスレッドに逃がしてバックグラウンド実行
+            tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
             if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.4):
                 found = True
                 advice = get_action_advice(tech)
@@ -345,6 +332,7 @@ class InstitutionalBoardView(View):
         if not found:
             report += "現在、板情報で売り板を急速に飲み込むような大口集中銘柄はありません。"
 
+        # 3. 準備が整い次第、追記送信
         await interaction.followup.send(report)
 
 @bot.event
