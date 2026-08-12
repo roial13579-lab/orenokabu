@@ -59,12 +59,12 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot 設定 ---
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN", os.environ.get("TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg"))
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN", os.environ.get("TOKEN", ""))
 
-DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "1537090733490835498")))
-GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "1535613064056152247"))
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "1537090877003014226"))
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "1537090824834261122"))
+DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", os.environ.get("PANEL_CHANNEL_ID", "0")))
+GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0"))
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "0"))
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "0"))
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -266,9 +266,7 @@ def get_action_advice(tech):
     else:
         return "🟡 **【ホールド / 様子見】** 明確な方向感模索中。静観または既存ポジション維持。"
 
-# ★ダッシュボードには一切メッセージを出さず、指定した「#一般」チャンネルのみに送信する
 async def send_to_general_channel(interaction: discord.Interaction, full_text: str):
-    # まずボタンを押したインタラクションをサイレントに完了させる（これで返信線が出なくなります）
     if not interaction.response.is_done():
         await interaction.response.defer()
 
@@ -340,91 +338,148 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        full_report = "📊 **【10大業界 世界ニュース・マクロ要因別 資金流入力学】**\n"
+        full_report = "📊 **【10大業界 世界ニュース・資金流入力学】**\n"
         if LAST_CACHE_TIME:
             full_report += f"⏱️ データ更新時刻: {LAST_CACHE_TIME.strftime('%H:%M:%S')}\n\n"
 
-        sector_scores = {}
+        sector_data = []
 
         for sector_name, tickers in SECTORS.items():
-            full_report += f"**🔹 {sector_name}**\n"
-            line_items = []
+            ticker_stats = []
             scores = []
+            
             for code in tickers:
                 tech = DATA_CACHE.get(code)
                 clean_code = code.replace('.T','')
                 if tech:
                     score = min(max(int(
                         (tech['vol_ratio'] * 25) + 
-                        (tech['rsi'] * 0.4) + 
+                        (abs(tech['change']) * 5) + 
+                        (tech['rsi'] * 0.3) + 
                         (15 if tech['is_gc'] or tech['macd_gc'] else 0) +
                         (15 if tech['is_high_breakout'] else 0)
                     ), 10), 100)
                     scores.append(score)
-                    status = "🔥" if score >= 65 else ("⚡" if score >= 40 else "🔻")
-                    line_items.append(f"`{clean_code}`:{status}{score}点")
-                else:
-                    line_items.append(f"`{clean_code}`:取得中")
-            
+                    ticker_stats.append({
+                        "code": clean_code,
+                        "score": score,
+                        "change": tech['change'],
+                        "vol_ratio": tech['vol_ratio']
+                    })
+
+            # セクター内の銘柄をインパクト順（スコア順）にソート
+            ticker_stats.sort(key=lambda x: x['score'], reverse=True)
+
+            line_items = []
+            for t in ticker_stats:
+                status = "🔥" if t['score'] >= 65 else ("⚡" if t['score'] >= 40 else "🔻")
+                line_items.append(f"`{t['code']}`:{status}{t['score']}点({t['change']}%/出来高{t['vol_ratio']}倍)")
+
             avg_score = int(sum(scores) / len(scores)) if scores else 50
-            sector_scores[sector_name] = avg_score
             news_info = SECTOR_NEWS_FACTORS.get(sector_name, {"high": "ニュース連動買い。", "low": "利確・調整売り。"})
             reason_str = news_info["high"] if avg_score >= 50 else news_info["low"]
 
-            full_report += "> " + " | ".join(line_items) + f"\n"
-            full_report += f"├ **資金流入スコア**: `{avg_score}点`\n"
-            full_report += f"└ 🧠 **背景ニュース・要因**: {reason_str}\n\n"
+            sector_data.append({
+                "name": sector_name,
+                "avg_score": avg_score,
+                "line_items": line_items,
+                "reason": reason_str
+            })
 
-        sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
-        top_sector = sorted_sectors[0] if sorted_sectors else ("なし", 0)
-        bottom_sector = sorted_sectors[-1] if sorted_sectors else ("なし", 0)
+        # セクター自体も「平均資金流入スコアが大きい順」にソート
+        sector_data.sort(key=lambda x: x['avg_score'], reverse=True)
+
+        for s in sector_data:
+            full_report += f"**🔹 {s['name']}** (平均スコア: `{s['avg_score']}点`)\n"
+            full_report += "> " + " | ".join(s['line_items']) + "\n"
+            full_report += f"└ 🧠 **背景ニュース・要因**: {s['reason']}\n\n"
 
         full_report += "📈 **【業界動向サマリー】**\n"
-        full_report += f"├ 🔥 **最高資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
-        full_report += f"└ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)"
+        full_report += f"├ 🔥 **最高資金流入**: **{sector_data[0]['name']}** (`{sector_data[0]['avg_score']}点`)\n"
+        full_report += f"└ 🔻 **最不振セクター**: **{sector_data[-1]['name']}** (`{sector_data[-1]['avg_score']}点`)"
 
         await send_to_general_channel(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
-        report = "🎯 **【過去データ対比 注目シグナル抽出銘柄】**\n\n"
-        found_count = 0
+        report = "🎯 **【注目シグナル抽出（市場インパクト順）】**\n\n"
+        
+        signal_items = []
         for code, tech in DATA_CACHE.items():
             if tech and (tech['is_dip'] or tech['is_gc'] or tech['macd_gc'] or tech['bb_breakout'] or tech['is_high_breakout'] or tech['is_tenbagger']):
-                found_count += 1
                 signals = []
-                if tech['is_high_breakout']: signals.append("直近高値突破")
-                if tech['is_dip']: signals.append("過去反発点(売られ過ぎ)")
-                if tech['perfect_order']: signals.append("上昇パーフェクトオーダー")
-                if tech['is_gc'] or tech['macd_gc']: signals.append("ゴールデンクロス")
-                if tech['bb_breakout']: signals.append("+2σブレイク")
+                score = 0
 
-                advice = get_action_advice(tech)
-                clean_code = code.replace('.T','')
-                report += f"💡 **銘柄**: `{clean_code}` | **シグナル**: {', '.join(signals)}\n"
-                report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
+                if tech['is_high_breakout']: 
+                    signals.append("直近高値突破")
+                    score += 50
+                if tech['bb_breakout']: 
+                    signals.append("+2σブレイク")
+                    score += 40
+                if tech['perfect_order']: 
+                    signals.append("上昇パーフェクトオーダー")
+                    score += 30
+                if tech['is_dip']: 
+                    signals.append("過去反発点(売られ過ぎ)")
+                    score += 25
+                if tech['is_gc'] or tech['macd_gc']: 
+                    signals.append("ゴールデンクロス")
+                    score += 20
+
+                # 出来高倍率と株価変動幅（絶対値）を加算してソート
+                score += min(int(tech['vol_ratio'] * 15), 40)
+                score += min(int(abs(tech['change']) * 5), 30)
+
+                signal_items.append({
+                    "code": code,
+                    "tech": tech,
+                    "signals": signals,
+                    "score": score
+                })
         
-        if found_count == 0:
+        # 変動数・出来高・シグナル強度が最も大きい順にソート
+        signal_items.sort(key=lambda x: x['score'], reverse=True)
+
+        if not signal_items:
             report += "現在、明確なシグナル条件に合致する銘柄はありません。"
+        else:
+            for item in signal_items:
+                tech = item['tech']
+                advice = get_action_advice(tech)
+                clean_code = item['code'].replace('.T','')
+                
+                report += f"💡 **銘柄**: `{clean_code}` | **シグナル**: {', '.join(item['signals'])}\n"
+                report += f"├ **現在値**: {tech['price']}円 (**{tech['change']}%**) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
+                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
         
         await send_to_general_channel(interaction, report)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
     async def board_button(self, interaction: discord.Interaction, button: Button):
-        report = "⚡ **【大口買い集中・板急変分析】**\n\n"
-        found = False
-
+        report = "⚡ **【大口買い集中・板急変分析（買気配・出来高順）】**\n\n"
+        
+        board_items = []
         for code, tech in DATA_CACHE.items():
             if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.3 or tech['vol_spike']):
-                found = True
+                impact_score = (tech['bid_ask_ratio'] * 10) + (tech['vol_ratio'] * 5) + abs(tech['change'])
+                board_items.append({
+                    "code": tech['code'],
+                    "tech": tech,
+                    "impact": impact_score
+                })
+
+        # 板買い圧力・取引数が最も大きい順にソート
+        board_items.sort(key=lambda x: x['impact'], reverse=True)
+
+        if not board_items:
+            report += "現在、大口の買いが急増している銘柄はありません。"
+        else:
+            for item in board_items:
+                tech = item['tech']
                 advice = get_action_advice(tech)
                 report += f"🔥 **銘柄**: `{tech['code']}` | **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
-                report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
+                report += f"├ **現在値**: {tech['price']}円 (**{tech['change']}%**) | **出来高過去比**: `{tech['vol_ratio']}倍`\n"
                 report += f"└ 🧭 **アクション指針**: {advice}\n\n"
-
-        if not found:
-            report += "現在、大口の買いが急増している銘柄はありません。"
 
         await send_to_general_channel(interaction, report)
 
@@ -514,6 +569,7 @@ async def scheduled_market_reports():
 
     if time_str == "08:45":
         board_candidates = [t for t in DATA_CACHE.values() if t and (t['bid_ask_ratio'] >= 1.3 or t['vol_spike'])]
+        board_candidates.sort(key=lambda x: (x['bid_ask_ratio'] * x['vol_ratio']), reverse=True)
         msg = "🌅 **【寄り付き前 気配＆世界ニュース連動チェック】**\n"
         msg += f"📅 日時: {now.strftime('%Y-%m-%d')} 08:45\n\n"
         if board_candidates:
