@@ -75,6 +75,19 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
+SECTOR_MACRO_FACTORS = {
+    "1.半導体": {"high": "AIインフラ需要増・先端プロセス需給ひっ迫により資金集中。", "low": "米ハイテク株調整や利益確定売り進行。"},
+    "2.重工防衛": {"high": "防衛予算拡大期待や地政学リスク高まりで防衛・重機へ資金流入。", "low": "短期的材料出尽くし感による一時的ポジション調整。"},
+    "3.自動車": {"high": "為替の円安推移や輸出採算改善を見込んだ買い。", "low": "円高進行懸念や関税・貿易摩擦による警戒感。"},
+    "4.大型金融": {"high": "日銀利上げ観測に伴う貸出利ざや改善期待。", "low": "金利上昇が一服し利益確定売り。"},
+    "5.エネ資源": {"high": "原油・天然ガス価格の高騰やインフレヘッジでの買い。", "low": "世界的な景気減速懸念による原油・商品需要減退。"},
+    "6.海運物流": {"high": "地政学上の航路回航問題や運賃指数上昇。", "low": "運賃指数の下落や燃料コスト増加懸念。"},
+    "7.メガテック": {"high": "クラウド・生成AI需要拡大や株主還元姿勢を好感。", "low": "高PER株からの資金シフトやIT投資回収速度懸念。"},
+    "8.商社流通": {"high": "高配当・自社株買いなどの株主還元強化で買い。", "low": "資源価格一服や円高転換による目減り懸念。"},
+    "9.医薬バイオ": {"high": "ディフェンシブ資産としての逃避買い。", "low": "薬価改定リスクや他セクターへの資金移動。"},
+    "10.電気精密": {"high": "産業用機器・パワー半導体需要の回復期待。", "low": "中国市場での設備投資停滞懸念。"}
+}
+
 alert_history = {}
 
 def get_session():
@@ -84,7 +97,7 @@ def get_session():
         return None
 
 def fetch_ticker_full_analysis(ticker: str):
-    """同期的に単一銘柄のデータ取得・解析を行う"""
+    """単一銘柄のデータ取得・解析"""
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
@@ -147,6 +160,25 @@ def fetch_ticker_full_analysis(ticker: str):
         is_dip = (rsi <= 35 or bb_oversold) and (bias25 <= -5.0)
         is_overbought = (rsi >= 72) or (bias25 >= 15.0)
 
+        # 10倍株適性チェック（安全なフォールバック付き）
+        per, roe, revenue_growth = "N/A", "N/A", "N/A"
+        is_tenbagger = False
+        try:
+            info = ticker_obj.info or {}
+            per_val = info.get("trailingPE") or info.get("forwardPE")
+            roe_val = info.get("returnOnEquity")
+            rev_val = info.get("revenueGrowth")
+            mcap = info.get("marketCap")
+            
+            if per_val: per = round(float(per_val), 1)
+            if roe_val: roe = round(float(roe_val * 100), 1)
+            if rev_val: revenue_growth = round(float(rev_val * 100), 1)
+            
+            mcap_ok = (mcap / 1e8 < 1000) if (mcap and ticker.endswith(".T")) else True
+            is_tenbagger = mcap_ok and (rev_val and rev_val >= 0.2) and (roe_val and roe_val >= 0.15)
+        except Exception:
+            pass
+
         return {
             "code": ticker.replace(".T", ""),
             "price": current_price,
@@ -163,11 +195,26 @@ def fetch_ticker_full_analysis(ticker: str):
             "bid_ask_ratio": bid_ask_ratio,
             "board_breakout": board_breakout_imminent,
             "is_dip": is_dip,
-            "is_overbought": is_overbought
+            "is_overbought": is_overbought,
+            "is_tenbagger": is_tenbagger,
+            "per": per,
+            "roe": roe,
+            "rev_growth": revenue_growth
         }
     except Exception as e:
         print(f"Error analyzing {ticker}: {e}")
         return None
+
+def fetch_all_sync():
+    """全銘柄を一括取得する同期関数"""
+    all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
+    results = {}
+    for code in all_tickers:
+        tech = fetch_ticker_full_analysis(code)
+        if tech:
+            results[code] = tech
+        time.sleep(0.05)
+    return results
 
 def get_action_advice(tech):
     if tech['board_breakout']:
@@ -185,11 +232,162 @@ def get_action_advice(tech):
     else:
         return "🟡 **【様子見】** 明確なシグナル待ち。"
 
+def analyze_single_ticker(code_input: str):
+    code_input = code_input.upper().strip()
+    ticker = f"{code_input}.T" if code_input.isdigit() and len(code_input) == 4 else code_input
+    tech = fetch_ticker_full_analysis(ticker)
+    if tech:
+        status_str = "⚡ レンジ推移"
+        if tech['board_breakout']: status_str = "⚡ **板情報大口ブレイク直前**"
+        elif tech['is_dip']: status_str = "🎯 **押し目買いシグナル**"
+        elif tech['perfect_order'] and tech['vol_spike']: status_str = "🔥 **大商い・上昇パーフェクトオーダー**"
+        elif tech['bb_breakout']: status_str = "🚀 **ボリンジャー+2σブレイク**"
+        elif tech['is_gc'] or tech['macd_gc']: status_str = "✅ **トレンド転換ゴールデンクロス**"
+        elif tech['is_overbought']: status_str = "⚠️ **過熱警戒（買われ過ぎ）**"
+
+        advice = get_action_advice(tech)
+        gc_str = "✅ MA/MACDクロス" if (tech['is_gc'] or tech['macd_gc']) else "➖ なし"
+        po_str = "🔥 完全上昇配列" if tech['perfect_order'] else "➖ 通常"
+        vol_str = f"🔥 {tech['vol_ratio']}倍 (急増)" if tech['vol_spike'] else f"{tech['vol_ratio']}倍"
+
+        return (
+            f"📊 **【最新リアルタイム多角解析】`{code_input}`**\n"
+            f"├ **現在値**: {tech['price']}円 ({tech['change']}%)\n"
+            f"├ **板買い圧力倍率**: `{tech['bid_ask_ratio']}倍`\n"
+            f"├ **移動平均(25日乖離)**: {tech['bias']}%\n"
+            f"├ **移動平均配列**: {po_str}\n"
+            f"├ **RSI(14日)**: {tech['rsi']}%\n"
+            f"├ **ゴールデンクロス**: {gc_str}\n"
+            f"├ **出来高倍率**: {vol_str}\n"
+            f"├ **指標**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
+            f"├ **総合判定**: {status_str}\n"
+            f"└ 💡 **アクション指針**: {advice}"
+        )
+    else:
+        return f"⚠️ `{code_input}` の最新データを取得できませんでした。"
+
+class StockSearchModal(Modal, title="銘柄テクニカル＆板情報検索"):
+    stock_code = TextInput(
+        label="銘柄コード または ティッカーを入力",
+        placeholder="例: 7011, 8035, NVDA",
+        min_length=1,
+        max_length=10,
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        res_msg = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
+        await interaction.followup.send(res_msg)
+
+class InstitutionalBoardView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
+    async def search_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_modal(StockSearchModal())
+
+    @discord.ui.button(label="🌐 各業界 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
+    async def sector_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(thinking=True)
+        tech_data = await asyncio.to_thread(fetch_all_sync)
+        
+        full_report = "📊 **【全10セクター リアルタイム資金流入力学・変動要因レポート】**\n\n"
+        sector_scores = {}
+
+        for sector_name, tickers in SECTORS.items():
+            full_report += f"**🔹 {sector_name}**\n"
+            line_items = []
+            scores = []
+            for code in tickers:
+                tech = tech_data.get(code)
+                clean_code = code.replace('.T','')
+                if tech:
+                    score = min(max(int(
+                        (tech['vol_ratio'] * 25) + 
+                        (tech['rsi'] * 0.4) + 
+                        (15 if tech['is_gc'] or tech['macd_gc'] else 0) +
+                        (15 if tech['perfect_order'] else 0)
+                    ), 10), 100)
+                    scores.append(score)
+                    status = "🔥" if score >= 65 else ("⚡" if score >= 40 else "🔻")
+                    line_items.append(f"`{clean_code}`:{status}{score}点")
+                else:
+                    line_items.append(f"`{clean_code}`:取得中")
+            
+            avg_score = int(sum(scores) / len(scores)) if scores else 0
+            sector_scores[sector_name] = avg_score
+            macro_info = SECTOR_MACRO_FACTORS.get(sector_name, {"high": "需要拡大期待。", "low": "利確・調整売り。"})
+            reason_str = macro_info["high"] if avg_score >= 50 else macro_info["low"]
+
+            full_report += "> " + " | ".join(line_items) + f"\n"
+            full_report += f"├ **セクター勢い**: `{avg_score}点`\n"
+            full_report += f"└ 🧠 **変動要因分析**: {reason_str}\n\n"
+
+        sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
+        top_sector = sorted_sectors[0] if sorted_sectors else ("なし", 0)
+        bottom_sector = sorted_sectors[-1] if sorted_sectors else ("なし", 0)
+
+        full_report += "📈 **【リアルタイム全般の資金流入力学サマリー】**\n"
+        full_report += f"├ 🔥 **最大資金流入**: **{top_sector[0]}** (`{top_sector[1]}点`)\n"
+        full_report += f"├ 🔻 **最不振セクター**: **{bottom_sector[0]}** (`{bottom_sector[1]}点`)\n"
+        full_report += f"└ 🧭 **立ち回り**: 「{top_sector[0]}」への順張り、または「{bottom_sector[0]}」の反発狙いが有効です。\n"
+
+        await interaction.followup.send(full_report)
+
+    @discord.ui.button(label="🎯 押し目・買われ過ぎシグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_dip_signals_perm")
+    async def dip_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(thinking=True)
+        tech_data = await asyncio.to_thread(fetch_all_sync)
+        report = "🎯 **【リアルタイム抽出 注目銘柄・テクニカルシグナル】**\n\n"
+        found_count = 0
+        for code, tech in tech_data.items():
+            if tech and (tech['is_dip'] or tech['is_gc'] or tech['macd_gc'] or tech['bb_breakout'] or tech['perfect_order'] or tech['is_tenbagger']):
+                found_count += 1
+                signals = []
+                if tech['is_dip']: signals.append("押し目(売られ過ぎ)")
+                if tech['perfect_order']: signals.append("上昇パーフェクトオーダー")
+                if tech['is_gc'] or tech['macd_gc']: signals.append("ゴールデンクロス")
+                if tech['bb_breakout']: signals.append("+2σブレイク")
+                if tech['is_tenbagger']: signals.append("10倍株財務通過")
+
+                advice = get_action_advice(tech)
+                clean_code = code.replace('.T','')
+                report += f"💡 **銘柄**: `{clean_code}` | **シグナル**: {', '.join(signals)}\n"
+                report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **RSI**: {tech['rsi']}%\n"
+                report += f"└ 🧭 **アクション指針**: {advice}\n\n"
+        
+        if found_count == 0:
+            report += "現在、明確なシグナル条件に合致する注目銘柄はありません。"
+        
+        await interaction.followup.send(report)
+
+    @discord.ui.button(label="⚡ 板情報＆大動き動向分析", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
+    async def board_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(thinking=True)
+        tech_data = await asyncio.to_thread(fetch_all_sync)
+        report = "⚡ **【リアルタイム板情報・大口買い圧ブレイク分析】**\n\n"
+        found = False
+
+        for code, tech in tech_data.items():
+            if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.4):
+                found = True
+                advice = get_action_advice(tech)
+                report += f"🔥 **銘柄**: `{tech['code']}` | **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
+                report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高**: `{tech['vol_ratio']}倍`\n"
+                report += f"└ 🧭 **分析**: {advice}\n\n"
+
+        if not found:
+            report += "現在、板情報で売り板を急速に飲み込むような大口集中銘柄はありません。"
+
+        await interaction.followup.send(report)
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- 1. バックグラウンド非同期監視 ---
+# --- バックグラウンド非同期監視 ---
 @tasks.loop(minutes=10)
 async def real_time_signal_monitor():
     await bot.wait_until_ready()
@@ -203,7 +401,6 @@ async def real_time_signal_monitor():
 
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
     for code in all_tickers:
-        # 非同期化によりメインループを阻害しない
         tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
         if not tech:
             continue
@@ -244,7 +441,7 @@ async def real_time_signal_monitor():
             await channel.send(msg)
         await asyncio.sleep(0.1)
 
-# --- 2. 市場前後の定時レポート配信 ---
+# --- 市場前後の定時レポート配信 ---
 @tasks.loop(minutes=1)
 async def scheduled_market_reports():
     await bot.wait_until_ready()
@@ -305,44 +502,57 @@ async def scheduled_market_reports():
         msg += "\n🔮 **明日以降の注目判定**: 本日出来高を伴って+2σを突破した銘柄はトレンド継続、RSI30以下の銘柄はリバウンド狙いの買い候補となります。"
         await channel.send(msg)
 
-# --- Discord ボタン操作 (タイムアウト完全回避仕様) ---
-class InstitutionalBoardView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
+async def send_or_move_panel(channel):
+    if not channel:
+        return
+    try:
+        async for msg in channel.history(limit=15):
+            if msg.author == bot.user and "常設ダッシュボード" in msg.content:
+                await msg.delete()
+    except Exception:
+        pass
 
-    @discord.ui.button(label="⚡ 板情報＆大動き動向分析", style=discord.ButtonStyle.danger, custom_id="fetch_board_breakout_perm")
-    async def board_button(self, interaction: discord.Interaction, button: Button):
-        # 1. 最初に即時応答（defer）を行い、Discordに処理中であることを伝えて3秒タイムアウトを回避
-        await interaction.response.defer(thinking=True)
-        
-        all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
-        report = "⚡ **【リアルタイム板情報・大口買い圧ブレイク分析】**\n\n"
-        found = False
-
-        for code in all_tickers:
-            # 2. 通信・データ計算処理をスレッドに逃がしてバックグラウンド実行
-            tech = await asyncio.to_thread(fetch_ticker_full_analysis, code)
-            if tech and (tech['board_breakout'] or tech['bid_ask_ratio'] >= 1.4):
-                found = True
-                advice = get_action_advice(tech)
-                report += f"🔥 **銘柄**: `{tech['code']}` | **板買い圧力**: `{tech['bid_ask_ratio']}倍`\n"
-                report += f"├ **現在値**: {tech['price']}円 ({tech['change']}%) | **出来高**: `{tech['vol_ratio']}倍`\n"
-                report += f"└ 🧭 **分析**: {advice}\n\n"
-
-        if not found:
-            report += "現在、板情報で売り板を急速に飲み込むような大口集中銘柄はありません。"
-
-        # 3. 準備が整い次第、追記送信
-        await interaction.followup.send(report)
+    view = InstitutionalBoardView()
+    await channel.send(
+        "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
+        "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。\n"
+        "※ `🔍 銘柄詳細解析` ボタンを押すか、`!c 銘柄コード` で個別にチェックできます。",
+        view=view
+    )
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
     
+    target_channel = bot.get_channel(PANEL_CHANNEL_ID) if PANEL_CHANNEL_ID != 0 else None
+    if target_channel:
+        await send_or_move_panel(target_channel)
+        
     if not real_time_signal_monitor.is_running():
         real_time_signal_monitor.start()
     if not scheduled_market_reports.is_running():
         scheduled_market_reports.start()
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    text = message.content.strip()
+
+    if text in ["!k", "!panel", "！ｋ", "！ｐａｎｅｌ"]:
+        await send_or_move_panel(message.channel)
+        return
+
+    if text.startswith("!c ") or text.startswith("!check "):
+        parts = text.split()
+        if len(parts) >= 2:
+            async with message.channel.typing():
+                res_msg = await asyncio.to_thread(analyze_single_ticker, parts[1])
+                await message.channel.send(res_msg)
+        return
+
+    await bot.process_commands(message)
 
 bot.run(TOKEN)
