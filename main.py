@@ -1,14 +1,16 @@
 import os
 import time
 import threading
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord.ext import commands
 from discord.ui import Button, View, Modal, TextInput
 import yfinance as yf
 from curl_cffi import requests as cffi_requests
+import pandas as pd
 
-# --- Render用ダミーサーバー ---
+# --- Render用ダミーサーバー & スリープ防止 (Self-Ping) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -22,18 +24,50 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass
+        pass  # ログ出力で画面が埋まるのを防止
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", "10000"))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
+def keep_alive_ping():
+    """10分ごとに自分自身（または外部URL）へアクセスしてRenderの15分スリープを回避"""
+    time.sleep(30)  # 起動直後の待ち時間
+    
+    # Renderの環境変数「RENDER_EXTERNAL_URL」を自動取得（手動で自サーバーURLを指定も可能）
+    service_url = os.environ.get("RENDER_EXTERNAL_URL")
+    
+    # 環境変数が取れない場合のローカル（または直接URL指定）のフォールバック
+    if not service_url:
+        port = os.environ.get("PORT", "10000")
+        service_url = f"http://127.0.0.1:{port}"
+
+    print(f"🔄 Self-ping loop started. Target: {service_url}")
+
+    while True:
+        try:
+            req = urllib.request.Request(
+                service_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Render Keep-Alive Loop)'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                pass
+            print(f"⏰ [Keep-Alive] Ping sent to {service_url} - Status: 200 OK")
+        except Exception as e:
+            print(f"⚠️ [Keep-Alive] Ping failed: {e}")
+        
+        # 10分（600秒）ごとに実行（15分ルールを余裕を持ってクリア）
+        time.sleep(600)
+
+# スレッドを起動して並行実行
 threading.Thread(target=run_dummy_server, daemon=True).start()
+threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot 設定 ---
-TOKEN = "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg"
-PANEL_CHANNEL_ID = 1535613064056152247
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "MTUzNTYzNjc4MzU1ODA0MTY0MA.GBw8SB.9TSIbUXCWXJZJN5tn0h3sUfKALHRFCDs4yO5Dg")
+PANEL_CHANNEL_ID = int(os.environ.get("PANEL_CHANNEL_ID", "1535613064056152247"))
+
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
     "2.重工防衛": ["7011.T", "7012.T", "7013.T", "6301.T", "6367.T"],
@@ -47,12 +81,10 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-# キャッシュ保持用辞書 (キー: ticker, 値: (timestamp, data_dict))
 STOCK_CACHE = {}
-CACHE_TTL = 300  # キャッシュ有効期限: 5分 (300秒)
+CACHE_TTL = 300  # キャッシュ 5分
 
 def get_session():
-    # curl_cffiを利用してブラウザアクセスを模倣
     try:
         session = cffi_requests.Session(impersonate="chrome110")
         return session
@@ -60,6 +92,7 @@ def get_session():
         return None
 
 def fetch_single_ticker_data(ticker: str):
+    """テクニカル（価格・MA・RSI・ボリンジャーバンド）とファンダメンタルズを取得"""
     now = time.time()
     if ticker in STOCK_CACHE:
         cached_time, cached_data = STOCK_CACHE[ticker]
@@ -69,29 +102,53 @@ def fetch_single_ticker_data(ticker: str):
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
-        df = ticker_obj.history(period="1mo", interval="1d")
+        df = ticker_obj.history(period="3mo", interval="1d")
         
-        if df.empty or len(df['Close']) == 0:
+        if df.empty or len(df['Close']) < 25:
             return None
 
         close = df['Close'].dropna()
-        volume = df['Volume'].dropna() if 'Volume' in df else []
-
-        if len(close) == 0:
-            return None
+        volume = df['Volume'].dropna() if 'Volume' in df else pd.Series()
 
         current_price = close.iloc[-1]
-        ma25 = close.mean()
-        bias = ((current_price - ma25) / ma25) * 100 if ma25 != 0 else 0
+        
+        sma5 = close.rolling(window=5).mean()
+        sma25 = close.rolling(window=25).mean()
+        
+        bias = ((current_price - sma25.iloc[-1]) / sma25.iloc[-1]) * 100 if sma25.iloc[-1] != 0 else 0
 
         delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).mean()
-        loss = (-delta.where(delta < 0, 0)).mean()
-        rs = gain / loss if loss != 0 else 1
-        rsi = 100 - (100 / (1 + rs)) if (1 + rs) != 0 else 50
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss if loss.iloc[-1] != 0 else pd.Series([1])
+        rsi = 100 - (100 / (1 + rs.iloc[-1])) if not rs.empty else 50
 
-        vol_ma = volume.mean() if len(volume) > 0 else 0
+        is_gc = (sma5.iloc[-2] <= sma25.iloc[-2]) and (sma5.iloc[-1] > sma25.iloc[-1])
+
+        std25 = close.rolling(window=25).std()
+        upper_band = sma25 + (std25 * 2)
+        bb_breakout = current_price > upper_band.iloc[-1]
+
+        vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = (volume.iloc[-1] / vol_ma) if vol_ma > 0 else 1.0
+
+        info = {}
+        try:
+            info = ticker_obj.info or {}
+        except Exception:
+            pass
+
+        market_cap_ok = (info.get("marketCap", 0) / 1e8) < 1000 if info.get("marketCap") else False
+        revenue_growth = info.get("revenueGrowth", 0)
+        roe = info.get("returnOnEquity", 0)
+        per = info.get("trailingPE", 0) or info.get("forwardPE", 0)
+
+        is_tenbagger_candidate = (
+            market_cap_ok and 
+            (revenue_growth and revenue_growth >= 0.20) and 
+            (roe and roe >= 0.15) and 
+            (per and per < 100)
+        )
 
         is_dip = (rsi <= 35) and (bias <= -5.0)
 
@@ -100,7 +157,13 @@ def fetch_single_ticker_data(ticker: str):
             "bias": round(float(bias), 1),
             "rsi": round(float(rsi), 1),
             "vol_ratio": round(float(vol_ratio), 2),
-            "is_dip": is_dip
+            "is_gc": is_gc,
+            "bb_breakout": bb_breakout,
+            "is_dip": is_dip,
+            "is_tenbagger": is_tenbagger_candidate,
+            "per": round(float(per), 1) if per else "N/A",
+            "roe": round(float(roe * 100), 1) if roe else "N/A",
+            "rev_growth": round(float(revenue_growth * 100), 1) if revenue_growth else "N/A"
         }
 
         STOCK_CACHE[ticker] = (now, result)
@@ -115,18 +178,26 @@ def analyze_single_ticker(code_input: str):
 
     tech = fetch_single_ticker_data(ticker)
     if tech:
-        status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if tech['is_dip'] else "⚡ 正常範囲内（押し目水準ではありません）"
+        status_str = "🎯 **押し目買いシグナル点灯中！（売られ過ぎ）**" if tech['is_dip'] else "⚡ レンジ内"
+        gc_str = "✅ 発生" if tech['is_gc'] else "➖ なし"
+        bb_str = "🚀 +2σ上抜け" if tech['bb_breakout'] else "➖ 正常値"
+        tb_str = "🌟 10倍株基準クリア（高成長・適正評価）" if tech['is_tenbagger'] else "➖ 基準外"
+
         return (
-            f"📊 **【個別銘柄解析】`{code_input}`**\n"
-            f"├ **現在値**: {tech['price']}\n"
+            f"📊 **【多角的銘柄・罫線解析】`{code_input}`**\n"
+            f"├ **現在値**: {tech['price']}円\n"
             f"├ **25日乖離率**: {tech['bias']}%\n"
             f"├ **RSI(14)**: {tech['rsi']}%\n"
+            f"├ **ゴールデンクロス**: {gc_str}\n"
+            f"├ **ボリンジャーバンド**: {bb_str}\n"
+            f"├ **10倍株スクリーニング**: {tb_str}\n"
+            f"├ **指標情報**: PER `{tech['per']}倍` | ROE `{tech['roe']}%` | 増収率 `{tech['rev_growth']}%` \n"
             f"└ **判定**: {status_str}"
         )
     else:
-        return f"⚠️ `{code_input}` の株価データを取得できませんでした。アクセス制限中か、コードが誤っている可能性があります。少し時間をおいて再試行してください。"
+        return f"⚠️ `{code_input}` の株価データを取得できませんでした。コードが正しいか確認の上、少し時間をおいて再試行してください。"
 
-class StockSearchModal(Modal, title="銘柄テクニカル判定検索"):
+class StockSearchModal(Modal, title="銘柄テクニカル＆10倍株判定検索"):
     stock_code = TextInput(
         label="銘柄コード または ティッカーを入力",
         placeholder="例: 7011, 8035, 4052, NVDA",
@@ -147,22 +218,22 @@ def fetch_all_technical_data():
         tech = fetch_single_ticker_data(code)
         if tech:
             results[code] = tech
-        time.sleep(0.1)  # 連続アクセス対策のマイクロウェイト
+        time.sleep(0.1)
     return results
 
 class InstitutionalBoardView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔍 銘柄検索", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
+    @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(StockSearchModal())
 
-    @discord.ui.button(label="🌐 各業界5社 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
+    @discord.ui.button(label="🌐 各業界 資金流入力学", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
         tech_data = fetch_all_technical_data()
-        full_report = "📊 **【全10セクター 資金流入力学リアルタイム解析】**\n\n"
+        full_report = "📊 **【全10セクター 資金流入力学・シグナル解析】**\n\n"
         for sector_name, tickers in SECTORS.items():
             full_report += f"**🔹 {sector_name}**\n"
             line_items = []
@@ -170,8 +241,8 @@ class InstitutionalBoardView(View):
                 tech = tech_data.get(code)
                 clean_code = code.replace('.T','')
                 if tech:
-                    score = min(max(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5)), 10), 100)
-                    status = "🔥" if score >= 60 else ("⚡" if score >= 40 else "🔻")
+                    score = min(max(int((tech['vol_ratio'] * 30) + (tech['rsi'] * 0.5) + (20 if tech['is_gc'] else 0)), 10), 100)
+                    status = "🔥" if score >= 65 else ("⚡" if score >= 40 else "🔻")
                     line_items.append(f"`{clean_code}`:{status}{score}")
                 else:
                     line_items.append(f"`{clean_code}`:取得中")
@@ -180,20 +251,28 @@ class InstitutionalBoardView(View):
         await interaction.followup.send(full_report)
         await send_or_move_panel(interaction.channel)
 
-    @discord.ui.button(label="📉 押し目買いシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
+    @discord.ui.button(label="📉 押し目・大化けシグナル検出", style=discord.ButtonStyle.danger, custom_id="fetch_dip_signals_perm")
     async def dip_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(thinking=True)
         tech_data = fetch_all_technical_data()
-        report = "🎯 **【大型株 一時的下落（押し目買い）判定レポート】**\n\n"
+        report = "🎯 **【注目銘柄・テクニカル＋大化けシグナル抽出レポート】**\n\n"
         found_count = 0
         for code, tech in tech_data.items():
-            if tech and tech['is_dip']:
+            if tech and (tech['is_dip'] or tech['is_gc'] or tech['bb_breakout'] or tech['is_tenbagger']):
                 found_count += 1
-                report += f"💡 **銘柄**: `{code}`\n"
-                report += f"├ **現在値**: {tech['price']} / **25日乖離率**: {tech['bias']}%\n"
-                report += f"└ **RSI(14)**: {tech['rsi']}% (売られ過ぎ判定)\n\n"
+                signals = []
+                if tech['is_dip']: signals.append("押し目買い(売られ過ぎ)")
+                if tech['is_gc']: signals.append("ゴールデンクロス")
+                if tech['bb_breakout']: signals.append("+2σブレイクアウト")
+                if tech['is_tenbagger']: signals.append("10倍株財務クリア")
+
+                report += f"💡 **銘柄**: `{code}` | **検出**: {', '.join(signals)}\n"
+                report += f"├ **現在値**: {tech['price']}円 / **25日乖離**: {tech['bias']}%\n"
+                report += f"└ **RSI**: {tech['rsi']}% | **PER**: {tech['per']}倍 | **ROE**: {tech['roe']}%\n\n"
+        
         if found_count == 0:
-            report += "現在、売られ過ぎ水準（RSI 35%以下）に達している絶好の押し目対象銘柄はありません。"
+            report += "現在、シグナル条件に合致する注目銘柄はありません。"
+        
         await interaction.followup.send(report)
         await send_or_move_panel(interaction.channel)
 
@@ -215,7 +294,7 @@ async def send_or_move_panel(channel):
     await channel.send(
         "📌 **【常設ダッシュボード】株式機関投資分析・イベント予測 Bot**\n"
         "以下のボタンを押すと、リアルタイム解析を実行してレポートを出力します。\n"
-        "※ `🔍 銘柄検索` ボタンを押すか、`!c 銘柄コード` で個別にチェックできます。",
+        "※ `🔍 銘柄詳細解析` ボタンを押すか、`!c 銘柄コード` で個別にチェックできます。",
         view=view
     )
 
