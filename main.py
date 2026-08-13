@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
+import feedparser  # 📰 Google News RSS取得用
 
 # 日本時間 (JST)
 JST = timezone(timedelta(hours=9))
@@ -80,17 +81,18 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-SECTOR_NEWS_FACTORS = {
-    "1.半導体": {"high": "🌐 米SOX指数上昇やAI需要による大口資金流入。", "low": "🌐 ハイテク利確売りや米中規制警戒。"},
-    "2.重工防衛": {"high": "🌐 海外情勢緊迫や防衛予算増額方針で買い加速。", "low": "🌐 材料出尽くしに伴うポジション調整売り。"},
-    "3.自動車": {"high": "🌐 ドル円の円安推移による輸出採算改善期待。", "low": "🌐 米貿易関税リスクや円高懸念。"},
-    "4.大型金融": {"high": "🌐 日銀利上げ観測や金利上昇による利ざや拡大期待。", "low": "🌐 世界的な景気減速懸念に伴う金利低下。"},
-    "5.エネ資源": {"high": "🌐 中東情勢やOPEC減産による原油・ガス価格急伸。", "low": "🌐 景気後退懸念に伴うエネルギー需要縮小。"},
-    "6.海運物流": {"high": "🌐 地政学航路迂回や運賃指数急上昇報道。", "low": "🌐 港湾混雑解消や運賃指数の調整局面。"},
-    "7.メガテック": {"high": "🌐 生成AI・クラウド事業の好決算ニュース。", "low": "🌐 米金利上昇による高PER警戒感。"},
-    "8.商社流通": {"high": "🌐 海外投資家からの再評価＆資源高の好影響。", "low": "🌐 商品市況沈静化による利益押し下げ。"},
-    "9.医薬バイオ": {"high": "🌐 ディフェンシブ逃避・新薬承認ニュース。", "low": "🌐 薬価改定・他成長セクターへの資金移動。"},
-    "10.電気精密": {"high": "🌐 産業機器需要回復やパワー半導体需要。", "low": "🌐 中華圏向けFA需要の停滞。"}
+# 🔍 ニュース検索用キーワードの定義
+SECTOR_KEYWORDS = {
+    "1.半導体": "半導体 株価 SOX",
+    "2.重工防衛": "防衛 重工 防衛費",
+    "3.自動車": "自動車 株価 為替 円安",
+    "4.大型金融": "銀行 株価 金利 日銀",
+    "5.エネ資源": "原油 石油 資源 株価",
+    "6.海運物流": "海運 運賃 バルチック",
+    "7.メガテック": "ビッグテック AI IT株",
+    "8.商社流通": "総合商社 資源 株価",
+    "9.医薬バイオ": "製薬 医薬品 株価",
+    "10.電気精密": "電機 精密機器 株価"
 }
 
 DATA_CACHE = {}
@@ -101,7 +103,35 @@ def get_session():
     except Exception:
         return None
 
-# 🎯 株探（Kabutan）からリアルタイムまたは直近終値と正確な前日比(%)を取得
+# 📰 Google Newsから本物の最新ニュースを取得・解析する関数
+def fetch_real_sector_news(sector_name: str, avg_change: float):
+    keyword = SECTOR_KEYWORDS.get(sector_name, "株式市場")
+    encoded_query = urllib.parse.quote(keyword)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
+    
+    try:
+        feed = feedparser.parse(rss_url)
+        if not feed.entries:
+            return "📰 関連ニュースの取得に失敗しました。"
+
+        # 最新3件の見出しを取得
+        latest_titles = [entry.title.split(" - ")[0] for entry in feed.entries[:3]]
+        news_summary = " / ".join(latest_titles)
+
+        # 株価推移との因果関係評価
+        if avg_change > 0.5:
+            impact_eval = f"📈 **【追い風】** 直近ニュース（「{latest_titles[0]}」等）が材料視され、買いが優勢となっています。"
+        elif avg_change < -0.5:
+            impact_eval = f"📉 **【向かい風】** 報道（「{latest_titles[0]}」等）への警戒感や利確売りが上値を抑える要因になっています。"
+        else:
+            impact_eval = f"➡️ **【交錯・様子見】** ニュース（「{latest_titles[0]}」等）に対する市場の反応は拮抗しており、方向感を模索する動きです。"
+
+        return f"📰 **最新ニュース頭出し**: {news_summary}\n└ 💬 **影響評価**: {impact_eval}"
+
+    except Exception as e:
+        print(f"News fetch error for {sector_name}: {e}")
+        return "📰 ニュース取得中にエラーが発生しました。"
+
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
@@ -111,13 +141,11 @@ def get_exact_jp_stock_data(code: str):
         if res.status_code != 200: return None
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 株価
         price_tag = soup.find("span", class_="kabuka")
         if not price_tag: return None
         price_str = price_tag.text.replace(",", "").replace("円", "").strip()
         current_price = float(price_str)
 
-        # 前日比 (例: "+150 (+2.35%)" や "-30 (-0.85%)")
         day_change = 0.0
         change_dt = soup.find("dd", class_=re.compile(r"stock_kabuka_"))
         if change_dt:
@@ -146,7 +174,6 @@ def fetch_ticker_full_analysis(ticker: str):
         prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
         day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
 
-        # 🎯 日本株なら株探のピンポイントデータで上書き
         if ticker.endswith(".T"):
             exact = get_exact_jp_stock_data(ticker)
             if exact and exact["price"] > 0:
@@ -283,31 +310,85 @@ class StockSearchModal(Modal, title="銘柄多角解析"):
 class InstitutionalBoardView(View):
     def __init__(self): super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔍 銘柄多角高度解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
+    @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(StockSearchModal())
 
-    @discord.ui.button(label="🌐 業界別 資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
+    # 2. 🌐 各業界 リアルニュース・資金動向
+    @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer()
-        
-        # キャッシュが空なら一度取得を実行
         if not DATA_CACHE:
             await asyncio.to_thread(refresh_all_cache)
 
-        full_report = "📊 **【10大業界 資金動向・ニュース・将来評価】**\n\n"
+        full_report = "📊 **【10大業界 リアルタイムニュース＆株価影響分析】**\n\n"
         for sector_name, tickers in SECTORS.items():
-            scores, line_items = [], []
+            scores, changes, line_items = [], [], []
             for code in tickers:
                 tech = DATA_CACHE.get(code)
                 if tech:
                     scores.append(tech['score'])
+                    changes.append(tech['change'])
                     tag = "🚀" if tech['is_tenbagger_candidate'] else ("🔥" if tech['score'] >= 70 else "🔻")
                     line_items.append(f"`{tech['code']}`:{tag}{tech['score']}点({tech['change']}%)")
+            
             avg_score = int(sum(scores) / len(scores)) if scores else 50
-            reason = SECTOR_NEWS_FACTORS.get(sector_name, {})["high" if avg_score >= 50 else "low"]
-            full_report += f"**🔹 {sector_name}** (`{avg_score}点`)\n> " + " | ".join(line_items) + f"\n└ 🧠 {reason}\n\n"
+            avg_change = float(np.mean(changes)) if changes else 0.0
+
+            # 📰 ここでリアルのGoogle Newsを取得・分析
+            news_analysis = await asyncio.to_thread(fetch_real_sector_news, sector_name, avg_change)
+
+            full_report += (
+                f"**🔹 {sector_name}** (`モメンタム:{avg_score}点` | 平均騰落:`{avg_change:+.2f}%`)\n"
+                f"> " + " | ".join(line_items) + f"\n"
+                f"{news_analysis}\n\n"
+            )
         await send_to_channel(interaction.channel, full_report)
+
+    @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_breakout_signals_perm")
+    async def breakout_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        if not DATA_CACHE:
+            await asyncio.to_thread(refresh_all_cache)
+
+        sorted_items = sorted(DATA_CACHE.values(), key=lambda x: x['score'], reverse=True)
+        high_score_items = [t for t in sorted_items if t['score'] >= 60][:8]
+
+        res = "🎯 **【押し目・高値突破シグナル検出】**\n\n"
+        if not high_score_items:
+            res += "現在、明確なブレイクアウトシグナルが出ている銘柄はありません。"
+        else:
+            for t in high_score_items:
+                unit = "$" if t['is_us'] else "円"
+                tag = "🚀 [テンバガー候補]" if t['is_tenbagger_candidate'] else ("🔥 [パーフェクトオーダー]" if t['perfect_order'] else "📈 [上昇強気]")
+                res += (
+                    f"**{tag} `{t['code']}`** (スコア: `{t['score']}点`)\n"
+                    f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **RSI**: `{t['rsi']}`\n"
+                    f"└ 💡 **評価**: {get_future_action_eval(t)}\n\n"
+                )
+        await send_to_channel(interaction.channel, res)
+
+    @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_volume_spikes_perm")
+    async def volume_button(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer()
+        if not DATA_CACHE:
+            await asyncio.to_thread(refresh_all_cache)
+
+        spikes = [t for t in DATA_CACHE.values() if t['vol_ratio'] >= 1.3]
+        spikes.sort(key=lambda x: x['vol_ratio'], reverse=True)
+
+        res = "⚡ **【大口売買・板突破動向（出来高急増）】**\n\n"
+        if not spikes:
+            res += "現在、平時を超える急激な大口売買の集中は見られません。"
+        else:
+            for t in spikes[:8]:
+                unit = "$" if t['is_us'] else "円"
+                res += (
+                    f"🔥 **`{t['code']}`** | **出来高倍率**: `{t['vol_ratio']}倍`\n"
+                    f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **需給バランス比**: `{t['bid_ask_ratio']}`\n"
+                    f"└ 🧠 **大口評価**: {'大口の本格買い集め・板上抜け動向。' if t['change'] > 0 else '大口の売り浴びせ・戻り売り警戒。'}\n\n"
+                )
+        await send_to_channel(interaction.channel, res)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -343,7 +424,6 @@ async def scheduled_market_reports():
 async def on_message(message):
     if message.author.bot: return
 
-    # コマンド判定
     if message.content.strip() in ["!k", "!panel"]:
         try:
             await message.channel.purge(limit=10)
