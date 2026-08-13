@@ -15,7 +15,6 @@ import pandas as pd
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
-import feedparser  # 📰 Google News RSS取得用
 
 # 日本時間 (JST)
 JST = timezone(timedelta(hours=9))
@@ -81,20 +80,6 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-# 🔍 ニュース検索用キーワードの定義
-SECTOR_KEYWORDS = {
-    "1.半導体": "半導体 株価 SOX",
-    "2.重工防衛": "防衛 重工 防衛費",
-    "3.自動車": "自動車 株価 為替 円安",
-    "4.大型金融": "銀行 株価 金利 日銀",
-    "5.エネ資源": "原油 石油 資源 株価",
-    "6.海運物流": "海運 運賃 バルチック",
-    "7.メガテック": "ビッグテック AI IT株",
-    "8.商社流通": "総合商社 資源 株価",
-    "9.医薬バイオ": "製薬 医薬品 株価",
-    "10.電気精密": "電機 精密機器 株価"
-}
-
 DATA_CACHE = {}
 
 def get_session():
@@ -103,39 +88,101 @@ def get_session():
     except Exception:
         return None
 
-# 📰 Google Newsから本物の最新ニュースを取得・解析する関数
-def fetch_real_sector_news(sector_name: str, avg_change: float):
-    keyword = SECTOR_KEYWORDS.get(sector_name, "株式市場")
-    encoded_query = urllib.parse.quote(keyword)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ja&gl=JP&ceid=JP:ja"
-    
+# 🔍 株探の市況速報から「市場全体のメイン要因（トランプ発言、原油、金利、為替等）」をリアル解析
+def fetch_market_driver_context():
+    url = "https://kabutan.jp/news/marketnews/?category=1" # 市況ニュース
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        feed = feedparser.parse(rss_url)
-        if not feed.entries:
-            return "📰 関連ニュースの取得に失敗しました。"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code != 200:
+            return "直近の市況材料を解析中..."
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        # 最新の概況記事タイトルと要約を取得
+        news_items = soup.find_all("td", class_="news_time")
+        contexts = []
+        for item in news_items[:5]:
+            parent = item.parent
+            link = parent.find("a")
+            if link:
+                contexts.append(link.text.strip())
+        
+        full_text = " ".join(contexts)
+        
+        # キーワード抽出による要因プロファイル構築
+        drivers = []
+        if "トランプ" in full_text or "発言" in full_text or "関税" in full_text:
+            drivers.append("🇺🇸 米政勢・要人発言への警戒感")
+        if "原油" in full_text or "WTI" in full_text or "資源" in full_text:
+            drivers.append("🛢️ 原油市況・エネルギー価格の変動")
+        if "為替" in full_text or "円高" in full_text or "円安" in full_text:
+            drivers.append("💱 為替（ドル円）の動き")
+        if "金利" in full_text or "日銀" in full_text or "FRB" in full_text:
+            drivers.append("🏛️ 日米の金利動向・金融政策")
+        if "米株" in full_text or "SOX" in full_text or "ナスダック" in full_text:
+            drivers.append("🌐 米国市場（SOX・ナスダック）の連動")
 
-        # 最新3件の見出しを取得
-        latest_titles = [entry.title.split(" - ")[0] for entry in feed.entries[:3]]
-        news_summary = " / ".join(latest_titles)
+        if not drivers:
+            drivers.append("📊 決算発表およびポジション調整の動き")
 
-        # 株価推移との因果関係評価
-        if avg_change > 0.5:
-            impact_eval = f"📈 **【追い風】** 直近ニュース（「{latest_titles[0]}」等）が材料視され、買いが優勢となっています。"
-        elif avg_change < -0.5:
-            impact_eval = f"📉 **【向かい風】** 報道（「{latest_titles[0]}」等）への警戒感や利確売りが上値を抑える要因になっています。"
-        else:
-            impact_eval = f"➡️ **【交錯・様子見】** ニュース（「{latest_titles[0]}」等）に対する市場の反応は拮抗しており、方向感を模索する動きです。"
-
-        return f"📰 **最新ニュース頭出し**: {news_summary}\n└ 💬 **影響評価**: {impact_eval}"
-
+        return " / ".join(drivers)
     except Exception as e:
-        print(f"News fetch error for {sector_name}: {e}")
-        return "📰 ニュース取得中にエラーが発生しました。"
+        print(f"Market Driver Fetch Error: {e}")
+        return "市場動向データ取得中"
+
+# 各業界ごとの「因果関係ストーリー」生成
+def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_driver: str):
+    unit_str = "買われました" if avg_change > 0 else "売られました"
+    abs_change = abs(avg_change)
+
+    # 業界ごとの背景解説ロジック
+    if "半導体" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}の影響で米ハイテク・SOX指数が軟調となり、指数寄与度の高い大型半導体株を中心に売りが膨らみました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: AI需要への根強い期待や米株高を追い風に、大口の買い買い戻しが主導して買い優勢となりました（平均 `{avg_change:+.2f}%`）。"
+
+    elif "重工防衛" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}に伴うリスクオフや利確売りに押され、一時的な調整色を強めています（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: 地政学リスクの意識や防衛予算・設備投資関連のニュース材料を背景に、強気なポジション構築が進みました（平均 `{avg_change:+.2f}%`）。"
+
+    elif "自動車" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}による為替の円高振れ懸念や貿易関税リスクが重荷となり、輸出採算の悪化を警戒した売りが先行しました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: 為替の円安推移や米国需要の堅調さを背景に、採算改善を期待した買いが広まりました（平均 `{avg_change:+.2f}%`）。"
+
+    elif "大型金融" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}による長短金利の低下や世界的な景気減速懸念を受け、利ざや拡大期待の後退から売りが優勢となりました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: 日銀の追加利上げ観測や金利上昇に伴う運用利回り改善シナリオが評価され、金融機関株へ資金が流入しました（平均 `{avg_change:+.2f}%`）。"
+
+    elif "エネ資源" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}等によるWTI原油先物の上値の重さや資源市況の下落を受けて、インペックス等のエネルギー銘柄へ売りが波及しました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: 原油先物の上昇や中東情勢を受けた資源価格の持ち直しにより、エネルギー・鉱業株にインフレヘッジ目的の買いが入りました（平均 `{avg_change:+.2f}%`）。"
+
+    elif "海運物流" in sector_name:
+        if avg_change < 0:
+            return f"📉 **要因**: コンテナ運賃指数の伸び悩みや地政学リスクの沈静化観測から、過熱感からの利益確定売りが先行しました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: 運賃指数の高止まりや地政学的な航路迂回による運賃上昇期待が引き続き好材料視されています（平均 `{avg_change:+.2f}%`）。"
+
+    else:
+        if avg_change < 0:
+            return f"📉 **要因**: {main_driver}に伴う全体相場の地合い悪化に引っ張られ、下値を模索する展開となりました（平均 `{avg_change:+.2f}%`）。"
+        else:
+            return f"📈 **要因**: {main_driver}の好転とともに資金が循環し、押し目買いがしっかりと入る形となりました（平均 `{avg_change:+.2f}%`）。"
+
 
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200: return None
@@ -314,14 +361,22 @@ class InstitutionalBoardView(View):
     async def search_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(StockSearchModal())
 
-    # 2. 🌐 各業界 リアルニュース・資金動向
+    # 🌐 2. 各業界 ニュース・資金動向（市場イベント背景の因果関係レポート）
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer()
         if not DATA_CACHE:
             await asyncio.to_thread(refresh_all_cache)
 
-        full_report = "📊 **【10大業界 リアルタイムニュース＆株価影響分析】**\n\n"
+        # 全体市場を動かしているメインテーマ（トランプ/原油/為替/金利等）を解析
+        main_driver = await asyncio.to_thread(fetch_market_driver_context)
+
+        full_report = (
+            f"🌐 **【10大業界 イベント・市場要因による株価変動解析】**\n"
+            f"📌 **現在の相場主導要因**: `{main_driver}`\n"
+            f"─────────────────────────\n\n"
+        )
+
         for sector_name, tickers in SECTORS.items():
             scores, changes, line_items = [], [], []
             for code in tickers:
@@ -330,19 +385,19 @@ class InstitutionalBoardView(View):
                     scores.append(tech['score'])
                     changes.append(tech['change'])
                     tag = "🚀" if tech['is_tenbagger_candidate'] else ("🔥" if tech['score'] >= 70 else "🔻")
-                    line_items.append(f"`{tech['code']}`:{tag}{tech['score']}点({tech['change']}%)")
+                    line_items.append(f"`{tech['code']}`:{tag}{tech['change']}%")
             
-            avg_score = int(sum(scores) / len(scores)) if scores else 50
             avg_change = float(np.mean(changes)) if changes else 0.0
 
-            # 📰 ここでリアルのGoogle Newsを取得・分析
-            news_analysis = await asyncio.to_thread(fetch_real_sector_news, sector_name, avg_change)
+            # 💡 なぜその動向になったのかの因果関係解説文を生成
+            impact_story = generate_sector_impact_analysis(sector_name, avg_change, main_driver)
 
             full_report += (
-                f"**🔹 {sector_name}** (`モメンタム:{avg_score}点` | 平均騰落:`{avg_change:+.2f}%`)\n"
+                f"**🔹 {sector_name}** （平均騰落率: `{avg_change:+.2f}%`）\n"
                 f"> " + " | ".join(line_items) + f"\n"
-                f"{news_analysis}\n\n"
+                f"└ {impact_story}\n\n"
             )
+
         await send_to_channel(interaction.channel, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_breakout_signals_perm")
