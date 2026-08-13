@@ -127,93 +127,112 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"🔴 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"🟢 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
-# 日本株データ取得（強化版解析ロジック）
+# 日本株データ取得（Yahoo!ファイナンス経由・確実版）
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
-    url = f"https://kabutan.jp/stock/?code={clean_code}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    
+    # 1. Yahooファイナンス API エンドポイント
+    yahoo_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{clean_code}.T?interval=1d&range=5d"
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code != 200: return None
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        # 現在値の取得
-        price_tag = soup.find("span", class_="kabuka")
-        if not price_tag: return None
-        current_price = float(price_tag.text.replace(",", "").replace("円", "").strip())
-        
-        # 前日比（%）の取得強化
-        day_change = 0.0
-        
-        # パターン1: kabuka_detail クラスから抽出
-        kabuka_detail = soup.find("div", class_="kabuka_detail")
-        if kabuka_detail:
-            match = re.search(r"([-+]?\d+\.?\d*)\s*%", kabuka_detail.text)
-            if match:
-                day_change = float(match.group(1))
-
-        # パターン2: 汎用ブロックから前日比を抽出
-        if day_change == 0.0:
-            change_elems = soup.find_all(["dd", "span"], class_=re.compile(r"(stock_kabuka_|bg_)"))
-            for elem in change_elems:
-                match = re.search(r"([-+]?\d+\.?\d*)\s*%", elem.text)
-                if match:
-                    day_change = float(match.group(1))
-                    break
-
-        # パターン3: 全文テキスト検索
-        if day_change == 0.0:
-            match_alt = re.search(r"前日比.*?([-+]?\d+\.?\d*)\s*%", soup.text)
-            if match_alt:
-                day_change = float(match_alt.group(1))
-
-        # 時価総額
-        mcap_billion = 0.0
-        mcap_th = soup.find(lambda tag: tag.name in ["th", "td"] and "時価総額" in tag.text)
-        if mcap_th:
-            parent = mcap_th.parent
-            mcap_text = parent.text.replace(",", "").strip()
-            match_m = re.search(r"(\d+)\s*億円", mcap_text)
-            if match_m:
-                mcap_billion = float(match_m.group(1))
-
-        return {
-            "price": current_price,
-            "change": day_change,
-            "mcap_billion": mcap_billion
-        }
+        res = requests.get(yahoo_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            meta = data["chart"]["result"][0]["meta"]
+            current_price = float(meta.get("regularMarketPrice", 0.0))
+            prev_close = float(meta.get("chartPreviousClose", meta.get("previousClose", 0.0)))
+            
+            if current_price > 0 and prev_close > 0:
+                day_change = round(((current_price - prev_close) / prev_close) * 100, 2)
+                return {
+                    "price": current_price,
+                    "change": day_change,
+                    "mcap_billion": 0.0
+                }
     except Exception as e:
-        print(f"Kabutan Scraping Error ({code}): {e}")
-        return None
+        print(f"Yahoo Chart API Fetch Warning ({clean_code}): {e}")
+
+    # 2. バックアップ: Yahooファイナンス Webページスクレイピング
+    try:
+        web_url = f"https://finance.yahoo.co.jp/quote/{clean_code}.T"
+        res = requests.get(web_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            
+            # 株価取得
+            price_span = soup.find("span", class_=re.compile(r"_11263_9_"))
+            if not price_span:
+                price_span = soup.find("span", class_=re.compile(r"StyledPriceDetail"))
+            
+            # 前日比取得
+            change_span = soup.find("span", class_=re.compile(r"_3rN4_2L"))
+            if not change_span:
+                change_span = soup.find(text=re.compile(r"[-+]?\d+\.?\d*%"))
+
+            if price_span:
+                p_text = price_span.text.replace(",", "").replace("円", "").strip()
+                current_price = float(p_text)
+                day_change = 0.0
+                if change_span:
+                    c_match = re.search(r"([-+]?\d+\.?\d*)%", change_span.text if hasattr(change_span, 'text') else str(change_span))
+                    if c_match:
+                        day_change = float(c_match.group(1))
+
+                return {
+                    "price": current_price,
+                    "change": day_change,
+                    "mcap_billion": 0.0
+                }
+    except Exception as e:
+        print(f"Yahoo Web Scraping Warning ({clean_code}): {e}")
+
+    return None
 
 # 米国株データ取得
 def get_us_stock_data_direct(symbol: str):
-    url = f"https://finance.yahoo.com/quote/{symbol}/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    
+    # 1. Yahoo Finance Chart API
+    yahoo_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+    try:
+        res = requests.get(yahoo_url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            meta = data["chart"]["result"][0]["meta"]
+            current_price = float(meta.get("regularMarketPrice", 0.0))
+            prev_close = float(meta.get("chartPreviousClose", meta.get("previousClose", 0.0)))
+            
+            if current_price > 0 and prev_close > 0:
+                day_change = round(((current_price - prev_close) / prev_close) * 100, 2)
+                return {"price": current_price, "change": day_change, "mcap_billion": 10000.0}
+    except Exception as e:
+        print(f"US Yahoo API Warning ({symbol}): {e}")
+
+    # 2. Web Scraping Backup
+    url = f"https://finance.yahoo.com/quote/{symbol}/"
     try:
         res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code != 200:
-            return {"price": 150.0, "change": 0.0, "mcap_billion": 5000.0}
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            price_span = soup.find("fin-streamer", {"data-field": "regularMarketPrice", "data-symbol": symbol})
+            change_span = soup.find("fin-streamer", {"data-field": "regularMarketChangePercent", "data-symbol": symbol})
             
-        soup = BeautifulSoup(res.text, "html.parser")
-        price_span = soup.find("fin-streamer", {"data-field": "regularMarketPrice", "data-symbol": symbol})
-        change_span = soup.find("fin-streamer", {"data-field": "regularMarketChangePercent", "data-symbol": symbol})
-        
-        price = float(price_span.text.replace(",", "")) if price_span else 100.0
-        change = 0.0
-        if change_span and change_span.text:
-            raw_change = change_span.text.replace("(", "").replace(")", "").replace("%", "").replace("+", "").strip()
-            try:
-                change = float(raw_change)
-            except ValueError:
-                change = 0.0
+            price = float(price_span.text.replace(",", "")) if price_span else 100.0
+            change = 0.0
+            if change_span and change_span.text:
+                raw_change = change_span.text.replace("(", "").replace(")", "").replace("%", "").replace("+", "").strip()
+                try:
+                    change = float(raw_change)
+                except ValueError:
+                    change = 0.0
 
-        return {"price": price, "change": change, "mcap_billion": 10000.0}
+            return {"price": price, "change": change, "mcap_billion": 10000.0}
     except Exception as e:
         print(f"US Direct Fetch Warning ({symbol}): {e}")
-        return {"price": 100.0, "change": 0.0, "mcap_billion": 5000.0}
+
+    return {"price": 100.0, "change": 0.0, "mcap_billion": 5000.0}
 
 def fetch_ticker_full_analysis(ticker: str):
     try:
@@ -291,7 +310,6 @@ def analyze_single_ticker(code_input: str):
         return (
             f"📊 **【高度多角解析】`{code_input}`** (スコア: `{tech['score']}点`)\n"
             f"├ **現在値**: {tech['price']}{unit} (**{tech['change']:+.2f}%**)\n"
-            f"├ **時価総額**: `{tech['mcap_billion']}億円`\n"
             f"└ 💡 **評価**: {get_future_action_eval(tech)}"
         )
     return f"⚠️ `{code_input}` のデータを取得できませんでした。"
