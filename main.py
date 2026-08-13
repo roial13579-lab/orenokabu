@@ -85,7 +85,7 @@ ALERTED_SIGNALS = set()
 # 🔍 株探から市況材料を取得
 def fetch_market_driver_context():
     url = "https://kabutan.jp/news/marketnews/?category=1"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200: return "直近の市況材料を解析中..."
@@ -127,32 +127,47 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"🔴 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"🟢 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
-# 日本株データ取得
+# 日本株データ取得（強化版解析ロジック）
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200: return None
         soup = BeautifulSoup(res.text, "html.parser")
         
+        # 現在値の取得
         price_tag = soup.find("span", class_="kabuka")
         if not price_tag: return None
         current_price = float(price_tag.text.replace(",", "").replace("円", "").strip())
         
+        # 前日比（%）の取得強化
         day_change = 0.0
-        change_dt = soup.find_all(["dd", "span"], class_=re.compile(r"(stock_kabuka_|bg_)"))
-        for elem in change_dt:
-            match = re.search(r"([-+]?\d+\.?\d*)\s*%", elem.text)
+        
+        # パターン1: kabuka_detail クラスから抽出
+        kabuka_detail = soup.find("div", class_="kabuka_detail")
+        if kabuka_detail:
+            match = re.search(r"([-+]?\d+\.?\d*)\s*%", kabuka_detail.text)
             if match:
                 day_change = float(match.group(1))
-                break
+
+        # パターン2: 汎用ブロックから前日比を抽出
         if day_change == 0.0:
-            match_alt = re.search(r"前日比\s*.*?\(([-+]?\d+\.?\d*)%\)", soup.text)
+            change_elems = soup.find_all(["dd", "span"], class_=re.compile(r"(stock_kabuka_|bg_)"))
+            for elem in change_elems:
+                match = re.search(r"([-+]?\d+\.?\d*)\s*%", elem.text)
+                if match:
+                    day_change = float(match.group(1))
+                    break
+
+        # パターン3: 全文テキスト検索
+        if day_change == 0.0:
+            match_alt = re.search(r"前日比.*?([-+]?\d+\.?\d*)\s*%", soup.text)
             if match_alt:
                 day_change = float(match_alt.group(1))
 
+        # 時価総額
         mcap_billion = 0.0
         mcap_th = soup.find(lambda tag: tag.name in ["th", "td"] and "時価総額" in tag.text)
         if mcap_th:
@@ -175,7 +190,7 @@ def get_exact_jp_stock_data(code: str):
 def get_us_stock_data_direct(symbol: str):
     url = f"https://finance.yahoo.com/quote/{symbol}/"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     try:
         res = requests.get(url, headers=headers, timeout=5)
