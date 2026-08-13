@@ -133,67 +133,108 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"📉 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
+# 株探からの超高精度スクレイピング（最優先利用）
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200: return None
         soup = BeautifulSoup(res.text, "html.parser")
+        
+        # 現在株価
         price_tag = soup.find("span", class_="kabuka")
         if not price_tag: return None
         current_price = float(price_tag.text.replace(",", "").replace("円", "").strip())
+        
+        # 前日比 (%)
         day_change = 0.0
-        change_dt = soup.find("dd", class_=re.compile(r"stock_kabuka_"))
-        if change_dt:
-            match = re.search(r"\(([-+]?\d+\.?\d*)%\)", change_dt.text)
-            if match: day_change = float(match.group(1))
-        return {"price": current_price, "change": day_change}
-    except Exception:
+        change_dd = soup.find("dd", class_=re.compile(r"stock_kabuka_"))
+        if change_dd:
+            match = re.search(r"\(([-+]?\d+\.?\d*)%\)", change_dd.text)
+            if match:
+                day_change = float(match.group(1))
+
+        # 時価総額（億円）
+        mcap_billion = 0.0
+        mcap_th = soup.find(lambda tag: tag.name == "th" and "時価総額" in tag.text)
+        if mcap_th and mcap_th.find_next_sibling("td"):
+            mcap_text = mcap_th.find_next_sibling("td").text.replace(",", "").strip()
+            match_m = re.search(r"(\d+)\s*億円", mcap_text)
+            if match_m:
+                mcap_billion = float(match_m.group(1))
+
+        return {
+            "price": current_price,
+            "change": day_change,
+            "mcap_billion": mcap_billion
+        }
+    except Exception as e:
+        print(f"Kabutan Scraping Error ({code}): {e}")
         return None
 
 def fetch_ticker_full_analysis(ticker: str):
     try:
+        is_jp = ticker.endswith(".T")
+        jp_data = None
+
+        # 日本株の場合は株探スクレイピングを最優先
+        if is_jp:
+            jp_data = get_exact_jp_stock_data(ticker)
+
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
-        df = ticker_obj.history(period="1y", interval="1d")
-        if df.empty or len(df['Close']) < 30: return None
-
-        close, volume = df['Close'].dropna(), df['Volume'].dropna() if 'Volume' in df else pd.Series()
-        current_price = float(close.iloc[-1])
-        prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
-        day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
-
-        if ticker.endswith(".T"):
-            exact = get_exact_jp_stock_data(ticker)
-            if exact and exact["price"] > 0:
-                current_price, day_change = exact["price"], exact["change"]
-
-        sma5, sma25, sma75 = close.rolling(5).mean(), close.rolling(25).mean(), close.rolling(75).mean() if len(close) >= 75 else close.rolling(25).mean()
-        sma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else current_price
-
-        is_long_downtrend = current_price < sma200
-        perfect_order = (sma5.iloc[-1] > sma25.iloc[-1]) and (sma25.iloc[-1] > sma75.iloc[-1])
         
-        delta = close.diff()
-        gain, loss = (delta.where(delta > 0, 0)).rolling(14).mean(), (-delta.where(delta < 0, 0)).rolling(14).mean()
-        last_loss = loss.iloc[-1] if not loss.empty else 0
-        rsi = round(100.0 if last_loss == 0 else 100 - (100 / (1 + (gain.iloc[-1] / last_loss))), 1)
+        # テクニカル分析用にyfinanceヒストリカルを取得
+        df = ticker_obj.history(period="1y", interval="1d")
+        
+        current_price = 0.0
+        day_change = 0.0
+        mcap_in_billion = 0.0
 
-        vol_ma = volume.rolling(25).mean().iloc[-1] if len(volume) >= 25 else 0
-        vol_ratio = round((volume.iloc[-1] / vol_ma), 2) if vol_ma > 0 else 1.0
+        if jp_data:
+            current_price = jp_data["price"]
+            day_change = jp_data["change"]
+            mcap_in_billion = jp_data["mcap_billion"]
+        elif not df.empty:
+            close = df['Close'].dropna()
+            current_price = float(close.iloc[-1])
+            prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
+            day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
+        else:
+            return None
+
+        # テクニカル分析の計算（yfinanceでヒストリカルデータが取れている場合）
+        if not df.empty and len(df['Close']) >= 30:
+            close, volume = df['Close'].dropna(), df['Volume'].dropna() if 'Volume' in df else pd.Series()
+            
+            sma5, sma25, sma75 = close.rolling(5).mean(), close.rolling(25).mean(), close.rolling(75).mean() if len(close) >= 75 else close.rolling(25).mean()
+            sma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else current_price
+
+            is_long_downtrend = current_price < sma200
+            perfect_order = (sma5.iloc[-1] > sma25.iloc[-1]) and (sma25.iloc[-1] > sma75.iloc[-1])
+            
+            delta = close.diff()
+            gain, loss = (delta.where(delta > 0, 0)).rolling(14).mean(), (-delta.where(delta < 0, 0)).rolling(14).mean()
+            last_loss = loss.iloc[-1] if not loss.empty else 0
+            rsi = round(100.0 if last_loss == 0 else 100 - (100 / (1 + (gain.iloc[-1] / last_loss))), 1)
+
+            vol_ma = volume.rolling(25).mean().iloc[-1] if len(volume) >= 25 else 0
+            vol_ratio = round((volume.iloc[-1] / vol_ma), 2) if vol_ma > 0 else 1.0
+        else:
+            is_long_downtrend, perfect_order, rsi, vol_ratio = False, False, 50.0, 1.0
+
         bid_ask_ratio = round(vol_ratio * (1.2 if day_change > 0 else 0.8), 2)
-        mcap_in_billion, revenue_growth = 0, "N/A"
 
-        try:
-            info = ticker_obj.info or {}
-            mcap, rev_val = info.get("marketCap"), info.get("revenueGrowth")
-            if mcap: mcap_in_billion = round(mcap / 1e8, 1)
-            if rev_val: revenue_growth = round(float(rev_val * 100), 1)
-        except Exception: pass
+        if not is_jp:
+            try:
+                info = ticker_obj.info or {}
+                mcap = info.get("marketCap")
+                if mcap: mcap_in_billion = round(mcap / 1e8, 1)
+            except Exception: pass
 
-        is_tenbagger_candidate = (mcap_in_billion > 0 and mcap_in_billion < 1500) and (revenue_growth != "N/A" and revenue_growth >= 15.0) and (vol_ratio >= 1.5) and (rsi >= 50)
+        is_tenbagger_candidate = (mcap_in_billion > 0 and mcap_in_billion < 1500) and (rsi >= 50) and (vol_ratio >= 1.3)
         is_large_cap = mcap_in_billion >= 3000
 
         base_score = (vol_ratio * 20) + (abs(day_change) * 5) + (rsi * 0.2)
@@ -203,7 +244,7 @@ def fetch_ticker_full_analysis(ticker: str):
 
         return {
             "code": ticker.replace(".T", ""),
-            "is_us": not ticker.endswith(".T"),
+            "is_us": not is_jp,
             "price": current_price,
             "change": day_change,
             "rsi": rsi,
@@ -222,7 +263,7 @@ def fetch_ticker_full_analysis(ticker: str):
 
 def refresh_all_cache():
     global DATA_CACHE
-    print("🔄 バックグラウンドで全銘柄データを取得中...")
+    print("🔄 バックグラウンドで全銘柄データを更新中...")
     all_tickers = [ticker for sublist in SECTORS.values() for ticker in sublist]
     new_data = {}
     for code in all_tickers:
@@ -249,7 +290,7 @@ def analyze_single_ticker(code_input: str):
         unit = "$" if tech['is_us'] else "円"
         return (
             f"📊 **【高度多角解析】`{code_input}`** (スコア: `{tech['score']}点`)\n"
-            f"├ **現在値**: {tech['price']}{unit} (**{tech['change']}%**)\n"
+            f"├ **現在値**: {tech['price']}{unit} (**{tech['change']:+.2f}%**)\n"
             f"├ **時価総額**: `{tech['mcap_billion']}億円` | **出来高倍率**: `{tech['vol_ratio']}倍`\n"
             f"└ 💡 **評価**: {get_future_action_eval(tech)}"
         )
@@ -297,9 +338,8 @@ class InstitutionalBoardView(View):
         await interaction.response.defer(ephemeral=True)
 
         if not DATA_CACHE:
-            # キャッシュがない場合は取得をバックグラウンドで開始し即時返信
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
-            await interaction.followup.send("⏳ 現在市場データを初期化・取得中です。1〜2分後にもう一度お試しください。", ephemeral=True)
+            await interaction.followup.send("⏳ データ初期化中です。約1分後にお試しください。", ephemeral=True)
             return
 
         main_driver = await asyncio.to_thread(fetch_market_driver_context)
@@ -317,7 +357,7 @@ class InstitutionalBoardView(View):
                     scores.append(tech['score'])
                     changes.append(tech['change'])
                     tag = "🚀" if tech['is_tenbagger_candidate'] else ("🔥" if tech['score'] >= 70 else "🔻")
-                    line_items.append(f"`{tech['code']}`:{tag}{tech['change']}%")
+                    line_items.append(f"`{tech['code']}`:{tag}{tech['change']:+.2f}%")
             
             avg_change = float(np.mean(changes)) if changes else 0.0
             impact_story = generate_sector_impact_analysis(sector_name, avg_change, main_driver)
@@ -336,7 +376,7 @@ class InstitutionalBoardView(View):
 
         if not DATA_CACHE:
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
-            await interaction.followup.send("⏳ 現在市場データを初期化・取得中です。1〜2分後にもう一度お試しください。", ephemeral=True)
+            await interaction.followup.send("⏳ データ初期化中です。約1分後にお試しください。", ephemeral=True)
             return
 
         sorted_items = sorted(DATA_CACHE.values(), key=lambda x: x['score'], reverse=True)
@@ -351,7 +391,7 @@ class InstitutionalBoardView(View):
                 tag = "🚀 [テンバガー候補]" if t['is_tenbagger_candidate'] else ("🔥 [パーフェクトオーダー]" if t['perfect_order'] else "📈 [上昇強気]")
                 res += (
                     f"**{tag} `{t['code']}`** (スコア: `{t['score']}点`)\n"
-                    f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **RSI**: `{t['rsi']}`\n"
+                    f"├ **現在値**: {t['price']}{unit} ({t['change']:+.2f}%) | **RSI**: `{t['rsi']}`\n"
                     f"└ 💡 **評価**: {get_future_action_eval(t)}\n\n"
                 )
 
@@ -363,7 +403,7 @@ class InstitutionalBoardView(View):
 
         if not DATA_CACHE:
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
-            await interaction.followup.send("⏳ 現在市場データを初期化・取得中です。1〜2分後にもう一度お試しください。", ephemeral=True)
+            await interaction.followup.send("⏳ データ初期化中です。約1分後にお試しください。", ephemeral=True)
             return
 
         spikes = [t for t in DATA_CACHE.values() if t['vol_ratio'] >= 1.3]
@@ -377,7 +417,7 @@ class InstitutionalBoardView(View):
                 unit = "$" if t['is_us'] else "円"
                 res += (
                     f"🔥 **`{t['code']}`** | **出来高倍率**: `{t['vol_ratio']}倍`\n"
-                    f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **需給バランス比**: `{t['bid_ask_ratio']}`\n"
+                    f"├ **現在値**: {t['price']}{unit} ({t['change']:+.2f}%) | **需給バランス比**: `{t['bid_ask_ratio']}`\n"
                     f"└ 🧠 **大口評価**: {'大口の本格買い集め・板上抜け動向。' if t['change'] > 0 else '大口の売り浴びせ・戻り売り警戒。'}\n\n"
                 )
 
@@ -392,7 +432,7 @@ async def on_ready():
     print(f"Logged in as {bot.user.name}")
     bot.add_view(InstitutionalBoardView())
     
-    # 起動と同時にバックグラウンドでデータ取得を開始（ボタンを押した時の遅延を回避）
+    # 起動直後にデータ取得を開始
     asyncio.create_task(asyncio.to_thread(refresh_all_cache))
 
     if not real_time_signal_monitor.is_running(): real_time_signal_monitor.start()
@@ -414,7 +454,7 @@ async def scheduled_market_reports():
         jp_techs = [t for t in DATA_CACHE.values() if t and not t['is_us']]
         jp_techs.sort(key=lambda x: x['score'], reverse=True)
         for t in jp_techs[:5]:
-            msg += f"├ `{t['code']}`: **{t['change']}%** ({t['price']}円) | スコア:`{t['score']}点`\n"
+            msg += f"├ `{t['code']}`: **{t['change']:+.2f}%** ({t['price']}円) | スコア:`{t['score']}点`\n"
         await channel.send(msg)
 
 @bot.event
