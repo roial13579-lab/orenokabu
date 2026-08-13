@@ -133,7 +133,7 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"📉 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
-# 株探からの超高精度スクレイピング（最優先利用）
+# 株探からの超高精度スクレイピング（絶対優先）
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
@@ -179,14 +179,14 @@ def fetch_ticker_full_analysis(ticker: str):
         is_jp = ticker.endswith(".T")
         jp_data = None
 
-        # 日本株の場合は株探スクレイピングを最優先
+        # 日本株の場合は株探スクレイピングを最優先で取得
         if is_jp:
             jp_data = get_exact_jp_stock_data(ticker)
 
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
         
-        # テクニカル分析用にyfinanceヒストリカルを取得
+        # テクニカル分析用にyfinanceから過去データ取得
         df = ticker_obj.history(period="1y", interval="1d")
         
         current_price = 0.0
@@ -205,7 +205,7 @@ def fetch_ticker_full_analysis(ticker: str):
         else:
             return None
 
-        # テクニカル分析の計算（yfinanceでヒストリカルデータが取れている場合）
+        # RSI・移動平均線などのテクニカル計算
         if not df.empty and len(df['Close']) >= 30:
             close, volume = df['Close'].dropna(), df['Volume'].dropna() if 'Volume' in df else pd.Series()
             
