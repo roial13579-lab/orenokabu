@@ -1,7 +1,8 @@
 discord.py
 yfinance
-curl_cffi
 pandas
 numpy
-beautifulsoup4
 requests
+beautifulsoup4
+curl_cffi
+feedparser
