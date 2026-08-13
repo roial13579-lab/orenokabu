@@ -133,7 +133,7 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"📉 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
-# 株探からの超高精度スクレイピング（絶対優先）
+# 株探からの独立スクレイピング
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
@@ -177,38 +177,60 @@ def get_exact_jp_stock_data(code: str):
 def fetch_ticker_full_analysis(ticker: str):
     try:
         is_jp = ticker.endswith(".T")
-        jp_data = None
 
-        # 日本株の場合は株探スクレイピングを最優先で取得
+        # 【超重要な修正点】日本株の場合はyfinanceを一切触らず株探のみで処理を完結させる！
         if is_jp:
             jp_data = get_exact_jp_stock_data(ticker)
-
-        session = get_session()
-        ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
-        
-        # テクニカル分析用にyfinanceから過去データ取得
-        df = ticker_obj.history(period="1y", interval="1d")
-        
-        current_price = 0.0
-        day_change = 0.0
-        mcap_in_billion = 0.0
-
-        if jp_data:
+            if not jp_data:
+                return None
+            
             current_price = jp_data["price"]
             day_change = jp_data["change"]
             mcap_in_billion = jp_data["mcap_billion"]
-        elif not df.empty:
-            close = df['Close'].dropna()
-            current_price = float(close.iloc[-1])
-            prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
-            day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
-        else:
+            
+            # yfinanceエラーを避けるためテクニカル値は安全な標準値をセット
+            rsi = 50.0
+            vol_ratio = 1.0
+            perfect_order = False
+            is_long_downtrend = False
+            bid_ask_ratio = round(1.0 * (1.2 if day_change > 0 else 0.8), 2)
+            is_tenbagger_candidate = (mcap_in_billion > 0 and mcap_in_billion < 1500) and (day_change > 3.0)
+            is_large_cap = mcap_in_billion >= 3000
+
+            base_score = 50 + (abs(day_change) * 5)
+            if is_tenbagger_candidate: base_score += 20
+
+            return {
+                "code": ticker.replace(".T", ""),
+                "is_us": False,
+                "price": current_price,
+                "change": day_change,
+                "rsi": rsi,
+                "vol_ratio": vol_ratio,
+                "perfect_order": perfect_order,
+                "bid_ask_ratio": bid_ask_ratio,
+                "is_long_downtrend": is_long_downtrend,
+                "is_tenbagger_candidate": is_tenbagger_candidate,
+                "is_large_cap": is_large_cap,
+                "mcap_billion": mcap_in_billion,
+                "score": min(max(int(base_score), 10), 100)
+            }
+
+        # 米国株のみyfinanceで取得
+        session = get_session()
+        ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
+        df = ticker_obj.history(period="1y", interval="1d")
+
+        if df.empty:
             return None
 
-        # RSI・移動平均線などのテクニカル計算
-        if not df.empty and len(df['Close']) >= 30:
+        close = df['Close'].dropna()
+        current_price = float(close.iloc[-1])
+        prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
+        day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
+
+        if len(df['Close']) >= 30:
             close, volume = df['Close'].dropna(), df['Volume'].dropna() if 'Volume' in df else pd.Series()
-            
             sma5, sma25, sma75 = close.rolling(5).mean(), close.rolling(25).mean(), close.rolling(75).mean() if len(close) >= 75 else close.rolling(25).mean()
             sma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else current_price
 
@@ -226,13 +248,13 @@ def fetch_ticker_full_analysis(ticker: str):
             is_long_downtrend, perfect_order, rsi, vol_ratio = False, False, 50.0, 1.0
 
         bid_ask_ratio = round(vol_ratio * (1.2 if day_change > 0 else 0.8), 2)
+        mcap_in_billion = 0.0
 
-        if not is_jp:
-            try:
-                info = ticker_obj.info or {}
-                mcap = info.get("marketCap")
-                if mcap: mcap_in_billion = round(mcap / 1e8, 1)
-            except Exception: pass
+        try:
+            info = ticker_obj.info or {}
+            mcap = info.get("marketCap")
+            if mcap: mcap_in_billion = round(mcap / 1e8, 1)
+        except Exception: pass
 
         is_tenbagger_candidate = (mcap_in_billion > 0 and mcap_in_billion < 1500) and (rsi >= 50) and (vol_ratio >= 1.3)
         is_large_cap = mcap_in_billion >= 3000
@@ -243,8 +265,8 @@ def fetch_ticker_full_analysis(ticker: str):
         if is_long_downtrend: base_score -= 25
 
         return {
-            "code": ticker.replace(".T", ""),
-            "is_us": not is_jp,
+            "code": ticker,
+            "is_us": True,
             "price": current_price,
             "change": day_change,
             "rsi": rsi,
