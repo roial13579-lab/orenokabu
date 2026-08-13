@@ -62,9 +62,9 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # --- Discord Bot 設定 ---
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", os.environ.get("TOKEN", ""))
-DASHBOARD_CHANNEL_ID = int(os.environ.get("DASHBOARD_CHANNEL_ID", "0"))
-REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "0"))
-ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "0"))
+GENERAL_CHANNEL_ID = int(os.environ.get("GENERAL_CHANNEL_ID", "0")) # 結果を出力する一般チャンネル
+REPORT_CHANNEL_ID = int(os.environ.get("REPORT_CHANNEL_ID", "0"))   # 定時レポート
+ALERT_CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID", "0"))     # 売買アラート
 
 SECTORS = {
     "1.半導体": ["8035.T", "6857.T", "6146.T", "6920.T", "NVDA"],
@@ -127,7 +127,7 @@ def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_dr
     else:
         return f"🔴 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"🟢 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
-# 株探からの精度向上版データ取得（日本株）
+# 日本株データ取得
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
     url = f"https://kabutan.jp/stock/?code={clean_code}"
@@ -141,7 +141,6 @@ def get_exact_jp_stock_data(code: str):
         if not price_tag: return None
         current_price = float(price_tag.text.replace(",", "").replace("円", "").strip())
         
-        # 前日比 (パーセント) 取得精度の強化
         day_change = 0.0
         change_dt = soup.find_all(["dd", "span"], class_=re.compile(r"(stock_kabuka_|bg_)"))
         for elem in change_dt:
@@ -172,7 +171,7 @@ def get_exact_jp_stock_data(code: str):
         print(f"Kabutan Scraping Error ({code}): {e}")
         return None
 
-# 米国株の直接取得
+# 米国株データ取得
 def get_us_stock_data_direct(symbol: str):
     url = f"https://finance.yahoo.com/quote/{symbol}/"
     headers = {
@@ -289,16 +288,18 @@ class StockSearchModal(Modal, title="銘柄多角解析"):
             await interaction.response.defer(ephemeral=True)
         res = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
         
-        target_channel = interaction.client.get_channel(DASHBOARD_CHANNEL_ID)
+        # 一般チャンネルに送信
+        target_channel = interaction.client.get_channel(GENERAL_CHANNEL_ID)
         if not target_channel: target_channel = interaction.channel
         await target_channel.send(res)
-        await interaction.followup.send("✅ 結果を出力しました！", ephemeral=True)
+        await interaction.followup.send("✅ #一般 チャンネルへ結果を出力しました！", ephemeral=True)
 
 class InstitutionalBoardView(View):
     def __init__(self): super().__init__(timeout=None)
 
-    async def send_to_dashboard_channel(self, interaction: discord.Interaction, content: str):
-        target_channel = interaction.client.get_channel(DASHBOARD_CHANNEL_ID)
+    # 一般チャンネルへの送信関数
+    async def send_to_general_channel(self, interaction: discord.Interaction, content: str):
+        target_channel = interaction.client.get_channel(GENERAL_CHANNEL_ID)
         if not target_channel: target_channel = interaction.channel
 
         chunks, curr_chunk = [], ""
@@ -315,9 +316,9 @@ class InstitutionalBoardView(View):
             await target_channel.send(chunk)
             
         if not interaction.response.is_done():
-            await interaction.response.send_message("✅ 解析完了！結果を出力しました。", ephemeral=True)
+            await interaction.response.send_message("✅ #一般 チャンネルへ結果を出力しました！", ephemeral=True)
         else:
-            await interaction.followup.send("✅ 解析完了！結果を出力しました。", ephemeral=True)
+            await interaction.followup.send("✅ #一般 チャンネルへ結果を出力しました！", ephemeral=True)
 
     @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
@@ -359,7 +360,7 @@ class InstitutionalBoardView(View):
                 f"└ {impact_story}\n\n"
             )
 
-        await self.send_to_dashboard_channel(interaction, full_report)
+        await self.send_to_general_channel(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_breakout_signals_perm")
     async def breakout_button(self, interaction: discord.Interaction, button: Button):
@@ -387,7 +388,7 @@ class InstitutionalBoardView(View):
                     f"└ 💡 **評価**: {get_future_action_eval(t)}\n\n"
                 )
 
-        await self.send_to_dashboard_channel(interaction, res)
+        await self.send_to_general_channel(interaction, res)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_volume_spikes_perm")
     async def volume_button(self, interaction: discord.Interaction, button: Button):
@@ -414,7 +415,7 @@ class InstitutionalBoardView(View):
                     f"└ 🧠 **動向**: {'🟢 買い優勢の買い集め動向。' if t['change'] > 0 else '🔴 売り先行の調整動向。'}\n\n"
                 )
 
-        await self.send_to_dashboard_channel(interaction, res)
+        await self.send_to_general_channel(interaction, res)
 
 intents = discord.Intents.default()
 intents.message_content = True
