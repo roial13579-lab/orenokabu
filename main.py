@@ -88,96 +88,50 @@ def get_session():
     except Exception:
         return None
 
-# 🔍 株探の市況速報から「市場全体のメイン要因（トランプ発言、原油、金利、為替等）」をリアル解析
+# 🔍 株探の市況速報から「市場全体のメイン要因」を取得
 def fetch_market_driver_context():
-    url = "https://kabutan.jp/news/marketnews/?category=1" # 市況ニュース
+    url = "https://kabutan.jp/news/marketnews/?category=1"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code != 200:
-            return "直近の市況材料を解析中..."
+        if res.status_code != 200: return "直近の市況材料を解析中..."
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 最新の概況記事タイトルと要約を取得
         news_items = soup.find_all("td", class_="news_time")
         contexts = []
         for item in news_items[:5]:
             parent = item.parent
             link = parent.find("a")
-            if link:
-                contexts.append(link.text.strip())
+            if link: contexts.append(link.text.strip())
         
         full_text = " ".join(contexts)
-        
-        # キーワード抽出による要因プロファイル構築
         drivers = []
-        if "トランプ" in full_text or "発言" in full_text or "関税" in full_text:
-            drivers.append("🇺🇸 米政勢・要人発言への警戒感")
-        if "原油" in full_text or "WTI" in full_text or "資源" in full_text:
-            drivers.append("🛢️ 原油市況・エネルギー価格の変動")
-        if "為替" in full_text or "円高" in full_text or "円安" in full_text:
-            drivers.append("💱 為替（ドル円）の動き")
-        if "金利" in full_text or "日銀" in full_text or "FRB" in full_text:
-            drivers.append("🏛️ 日米の金利動向・金融政策")
-        if "米株" in full_text or "SOX" in full_text or "ナスダック" in full_text:
-            drivers.append("🌐 米国市場（SOX・ナスダック）の連動")
+        if "トランプ" in full_text or "発言" in full_text or "関税" in full_text: drivers.append("🇺🇸 米政勢・要人発言")
+        if "原油" in full_text or "WTI" in full_text or "資源" in full_text: drivers.append("🛢️ 原油市況・エネルギー価格")
+        if "為替" in full_text or "円高" in full_text or "円安" in full_text: drivers.append("💱 為替（ドル円）")
+        if "金利" in full_text or "日銀" in full_text or "FRB" in full_text: drivers.append("🏛️ 金利動向")
+        if "米株" in full_text or "SOX" in full_text or "ナスダック" in full_text: drivers.append("🌐 米国市場（SOX/ナスダック）")
 
-        if not drivers:
-            drivers.append("📊 決算発表およびポジション調整の動き")
-
-        return " / ".join(drivers)
+        return " / ".join(drivers) if drivers else "📊 決算発表・ポジション調整"
     except Exception as e:
         print(f"Market Driver Fetch Error: {e}")
         return "市場動向データ取得中"
 
-# 各業界ごとの「因果関係ストーリー」生成
 def generate_sector_impact_analysis(sector_name: str, avg_change: float, main_driver: str):
-    unit_str = "買われました" if avg_change > 0 else "売られました"
-    abs_change = abs(avg_change)
-
-    # 業界ごとの背景解説ロジック
     if "半導体" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}の影響で米ハイテク・SOX指数が軟調となり、指数寄与度の高い大型半導体株を中心に売りが膨らみました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: AI需要への根強い期待や米株高を追い風に、大口の買い買い戻しが主導して買い優勢となりました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}の影響で米ハイテク・SOX指数が軟調となり、売りが膨らみました（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: AI需要や米株高を追い風に、買戻し主導で買い優勢となりました（平均 `{avg_change:+.2f}%`）。"
     elif "重工防衛" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}に伴うリスクオフや利確売りに押され、一時的な調整色を強めています（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: 地政学リスクの意識や防衛予算・設備投資関連のニュース材料を背景に、強気なポジション構築が進みました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}に伴うリスクオフや利確売りに押され調整色を強めています（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: 地政学リスクや防衛予算関連のニュースを背景にポジション構築が進みました（平均 `{avg_change:+.2f}%`）。"
     elif "自動車" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}による為替の円高振れ懸念や貿易関税リスクが重荷となり、輸出採算の悪化を警戒した売りが先行しました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: 為替の円安推移や米国需要の堅調さを背景に、採算改善を期待した買いが広まりました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}による円高振れ懸念や関税リスクが重荷となり売りが先行（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: 為替の円安推移や採算改善を期待した買いが広まりました（平均 `{avg_change:+.2f}%`）。"
     elif "大型金融" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}による長短金利の低下や世界的な景気減速懸念を受け、利ざや拡大期待の後退から売りが優勢となりました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: 日銀の追加利上げ観測や金利上昇に伴う運用利回り改善シナリオが評価され、金融機関株へ資金が流入しました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}による金利低下懸念から売りが優勢（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: 日銀追加利上げ観測や金利上昇に伴う利回り改善シナリオで資金流入（平均 `{avg_change:+.2f}%`）。"
     elif "エネ資源" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}等によるWTI原油先物の上値の重さや資源市況の下落を受けて、インペックス等のエネルギー銘柄へ売りが波及しました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: 原油先物の上昇や中東情勢を受けた資源価格の持ち直しにより、エネルギー・鉱業株にインフレヘッジ目的の買いが入りました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}等によるWTI原油先物の伸び悩みを受け売りが波及（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: 原油先物上昇や資源価格の持ち直しでインフレヘッジの買いが入りました（平均 `{avg_change:+.2f}%`）。"
     elif "海運物流" in sector_name:
-        if avg_change < 0:
-            return f"📉 **要因**: コンテナ運賃指数の伸び悩みや地政学リスクの沈静化観測から、過熱感からの利益確定売りが先行しました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: 運賃指数の高止まりや地政学的な航路迂回による運賃上昇期待が引き続き好材料視されています（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: 運賃指数の伸び悩みや利確売りが先行（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: 運賃指数の高止まりや航路迂回による運賃上昇期待が好材料視（平均 `{avg_change:+.2f}%`）。"
     else:
-        if avg_change < 0:
-            return f"📉 **要因**: {main_driver}に伴う全体相場の地合い悪化に引っ張られ、下値を模索する展開となりました（平均 `{avg_change:+.2f}%`）。"
-        else:
-            return f"📈 **要因**: {main_driver}の好転とともに資金が循環し、押し目買いがしっかりと入る形となりました（平均 `{avg_change:+.2f}%`）。"
-
+        return f"📉 **要因**: {main_driver}に伴う地合い悪化に引っ張られ下値模索（平均 `{avg_change:+.2f}%`）。" if avg_change < 0 else f"📈 **要因**: {main_driver}の好転とともに押し目買いが入る形となりました（平均 `{avg_change:+.2f}%`）。"
 
 def get_exact_jp_stock_data(code: str):
     clean_code = code.replace(".T", "")
@@ -187,36 +141,26 @@ def get_exact_jp_stock_data(code: str):
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code != 200: return None
         soup = BeautifulSoup(res.text, "html.parser")
-        
         price_tag = soup.find("span", class_="kabuka")
         if not price_tag: return None
-        price_str = price_tag.text.replace(",", "").replace("円", "").strip()
-        current_price = float(price_str)
-
+        current_price = float(price_tag.text.replace(",", "").replace("円", "").strip())
         day_change = 0.0
         change_dt = soup.find("dd", class_=re.compile(r"stock_kabuka_"))
         if change_dt:
             match = re.search(r"\(([-+]?\d+\.?\d*)%\)", change_dt.text)
-            if match:
-                day_change = float(match.group(1))
-
+            if match: day_change = float(match.group(1))
         return {"price": current_price, "change": day_change}
     except Exception as e:
-        print(f"Kabutan Scraping Error ({code}): {e}")
         return None
 
 def fetch_ticker_full_analysis(ticker: str):
     try:
         session = get_session()
         ticker_obj = yf.Ticker(ticker, session=session) if session else yf.Ticker(ticker)
-        
         df = ticker_obj.history(period="1y", interval="1d")
-        if df.empty or len(df['Close']) < 30:
-            return None
+        if df.empty or len(df['Close']) < 30: return None
 
-        close = df['Close'].dropna()
-        volume = df['Volume'].dropna() if 'Volume' in df else pd.Series()
-
+        close, volume = df['Close'].dropna(), df['Volume'].dropna() if 'Volume' in df else pd.Series()
         current_price = float(close.iloc[-1])
         prev_price = float(close.iloc[-2]) if len(close) >= 2 else current_price
         day_change = round(((current_price - prev_price) / prev_price) * 100, 2)
@@ -224,47 +168,32 @@ def fetch_ticker_full_analysis(ticker: str):
         if ticker.endswith(".T"):
             exact = get_exact_jp_stock_data(ticker)
             if exact and exact["price"] > 0:
-                current_price = exact["price"]
-                day_change = exact["change"]
+                current_price, day_change = exact["price"], exact["change"]
 
-        sma5 = close.rolling(window=5).mean()
-        sma25 = close.rolling(window=25).mean()
-        sma75 = close.rolling(window=75).mean() if len(close) >= 75 else sma25
-        sma200 = close.rolling(window=200).mean().iloc[-1] if len(close) >= 200 else current_price
+        sma5, sma25, sma75 = close.rolling(5).mean(), close.rolling(25).mean(), close.rolling(75).mean() if len(close) >= 75 else close.rolling(25).mean()
+        sma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else current_price
 
         is_long_downtrend = current_price < sma200
         perfect_order = (sma5.iloc[-1] > sma25.iloc[-1]) and (sma25.iloc[-1] > sma75.iloc[-1])
-        bias25 = round(((current_price - sma25.iloc[-1]) / sma25.iloc[-1]) * 100, 1) if sma25.iloc[-1] != 0 else 0
-
+        
         delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain, loss = (delta.where(delta > 0, 0)).rolling(14).mean(), (-delta.where(delta < 0, 0)).rolling(14).mean()
         last_loss = loss.iloc[-1] if not loss.empty else 0
         rsi = round(100.0 if last_loss == 0 else 100 - (100 / (1 + (gain.iloc[-1] / last_loss))), 1)
 
-        vol_ma = volume.rolling(window=25).mean().iloc[-1] if len(volume) >= 25 else 0
+        vol_ma = volume.rolling(25).mean().iloc[-1] if len(volume) >= 25 else 0
         vol_ratio = round((volume.iloc[-1] / vol_ma), 2) if vol_ma > 0 else 1.0
-        vol_spike = vol_ratio >= 1.8
-
         bid_ask_ratio = round(vol_ratio * (1.2 if day_change > 0 else 0.8), 2)
-        mcap_in_billion = 0
-        revenue_growth = "N/A"
+        mcap_in_billion, revenue_growth = 0, "N/A"
 
         try:
             info = ticker_obj.info or {}
-            mcap = info.get("marketCap")
-            rev_val = info.get("revenueGrowth")
+            mcap, rev_val = info.get("marketCap"), info.get("revenueGrowth")
             if mcap: mcap_in_billion = round(mcap / 1e8, 1)
             if rev_val: revenue_growth = round(float(rev_val * 100), 1)
-        except Exception:
-            pass
+        except Exception: pass
 
-        is_tenbagger_candidate = (
-            (mcap_in_billion > 0 and mcap_in_billion < 1500) and 
-            (revenue_growth != "N/A" and revenue_growth >= 15.0) and 
-            (vol_spike or vol_ratio >= 1.5) and 
-            (rsi >= 50)
-        )
+        is_tenbagger_candidate = (mcap_in_billion > 0 and mcap_in_billion < 1500) and (revenue_growth != "N/A" and revenue_growth >= 15.0) and (vol_ratio >= 1.5) and (rsi >= 50)
         is_large_cap = mcap_in_billion >= 3000
 
         base_score = (vol_ratio * 20) + (abs(day_change) * 5) + (rsi * 0.2)
@@ -272,15 +201,11 @@ def fetch_ticker_full_analysis(ticker: str):
         if is_tenbagger_candidate: base_score += 20
         if is_long_downtrend: base_score -= 25
 
-        final_score = min(max(int(base_score), 10), 100)
-        is_us = not ticker.endswith(".T")
-
         return {
             "code": ticker.replace(".T", ""),
-            "is_us": is_us,
+            "is_us": not ticker.endswith(".T"),
             "price": current_price,
             "change": day_change,
-            "bias": bias25,
             "rsi": rsi,
             "vol_ratio": vol_ratio,
             "perfect_order": perfect_order,
@@ -289,10 +214,9 @@ def fetch_ticker_full_analysis(ticker: str):
             "is_tenbagger_candidate": is_tenbagger_candidate,
             "is_large_cap": is_large_cap,
             "mcap_billion": mcap_in_billion,
-            "score": final_score
+            "score": min(max(int(base_score), 10), 100)
         }
     except Exception as e:
-        print(f"Error analyzing {ticker}: {e}")
         return None
 
 def refresh_all_cache():
@@ -303,34 +227,15 @@ def refresh_all_cache():
         tech = fetch_ticker_full_analysis(code)
         if tech: new_data[code] = tech
         time.sleep(0.05)
-    if new_data:
-        DATA_CACHE = new_data
+    if new_data: DATA_CACHE = new_data
 
 def get_future_action_eval(tech):
     unit = "$" if tech['is_us'] else "円"
     p = tech['price']
-    tp_short = round(p * 1.08, 1)
-    tp_ten = round(p * 2.5, 1)
-    sl_line = round(p * 0.94, 1)
-
-    if tech['is_long_downtrend']:
-        return "⚠️ **【戻り売り警戒】** 長期下落傾向。反発は一転して売られやすい局面。"
-    elif tech['is_tenbagger_candidate']:
-        return f"🚀 **【テンバガー狙い・高ボラ型】** 短期爆発期待！\n└ 🎯 目標: `{tp_ten}{unit}` / 撤退: `{sl_line}{unit}`"
-    elif tech['is_large_cap']:
-        return "🏛️ **【大型主力株・ガチホ/押し目評価】** 長期安心銘柄。" if tech['perfect_order'] else "🏛️ **【大型株・ボックス推移】** 引きつけての買い。"
-    else:
-        return f"🟢 **【短期モメンタム型】** 直近高値突破の可能性あり（短期目標: `{tp_short}{unit}`）。" if tech['score'] >= 75 else "🟡 **【様子見】** 明確なトレンド待ち。"
-
-async def send_to_channel(channel, full_text: str):
-    chunks, curr_chunk = [], ""
-    for line in full_text.split("\n"):
-        if len(curr_chunk) + len(line) + 1 > 1900:
-            chunks.append(curr_chunk)
-            curr_chunk = line + "\n"
-        else: curr_chunk += line + "\n"
-    if curr_chunk: chunks.append(curr_chunk)
-    for chunk in chunks: await channel.send(chunk)
+    if tech['is_long_downtrend']: return "⚠️ **【戻り売り警戒】** 長期下落傾向。反発は売られやすい局面。"
+    elif tech['is_tenbagger_candidate']: return f"🚀 **【テンバガー狙い・高ボラ型】** 短期爆発期待！\n└ 🎯 目標: `{round(p*2.5, 1)}{unit}` / 撤退: `{round(p*0.94, 1)}{unit}`"
+    elif tech['is_large_cap']: return "🏛️ **【大型主力株・ガチホ評価】**" if tech['perfect_order'] else "🏛️ **【大型株・ボックス推移】**"
+    else: return f"🟢 **【短期モメンタム型】**（目標: `{round(p*1.08, 1)}{unit}`）" if tech['score'] >= 75 else "🟡 **【様子見】**"
 
 def analyze_single_ticker(code_input: str):
     code_input = code_input.upper().strip()
@@ -338,39 +243,58 @@ def analyze_single_ticker(code_input: str):
     tech = fetch_ticker_full_analysis(ticker)
     if tech:
         unit = "$" if tech['is_us'] else "円"
-        eval_str = get_future_action_eval(tech)
         return (
             f"📊 **【高度多角解析】`{code_input}`** (スコア: `{tech['score']}点`)\n"
             f"├ **現在値**: {tech['price']}{unit} (**{tech['change']}%**)\n"
             f"├ **時価総額**: `{tech['mcap_billion']}億円` | **出来高倍率**: `{tech['vol_ratio']}倍`\n"
-            f"└ 💡 **評価**: {eval_str}"
+            f"└ 💡 **評価**: {get_future_action_eval(tech)}"
         )
     return f"⚠️ `{code_input}` のデータを取得できませんでした。"
 
 class StockSearchModal(Modal, title="銘柄多角解析"):
     stock_code = TextInput(label="銘柄コードを入力", placeholder="例: 7013, 8035, NVDA")
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.send_message("一般チャンネルに検索結果を出力しました！", ephemeral=True)
         res = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
-        await send_to_channel(interaction.channel, res)
+        
+        general_channel = interaction.client.get_channel(GENERAL_CHANNEL_ID)
+        if general_channel:
+            await general_channel.send(res)
 
 class InstitutionalBoardView(View):
     def __init__(self): super().__init__(timeout=None)
+
+    # 共通送信関数（押した本人にはひっそり通知、本文は一般チャンネルへ送信）
+    async def send_to_general_channel(self, interaction: discord.Interaction, content: str):
+        await interaction.response.send_message("一般チャンネルに結果を出力しました！", ephemeral=True)
+        
+        general_channel = interaction.client.get_channel(GENERAL_CHANNEL_ID)
+        if not general_channel:
+            print(f"⚠️ GENERAL_CHANNEL_ID ({GENERAL_CHANNEL_ID}) が見つかりませんでした。")
+            return
+
+        chunks, curr_chunk = [], ""
+        for line in content.split("\n"):
+            if len(curr_chunk) + len(line) + 1 > 1900:
+                chunks.append(curr_chunk)
+                curr_chunk = line + "\n"
+            else:
+                curr_chunk += line + "\n"
+        if curr_chunk:
+            chunks.append(curr_chunk)
+
+        for chunk in chunks:
+            await general_channel.send(chunk)
 
     @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(StockSearchModal())
 
-    # 🌐 2. 各業界 ニュース・資金動向（市場イベント背景の因果関係レポート）
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        if not DATA_CACHE:
-            await asyncio.to_thread(refresh_all_cache)
+        if not DATA_CACHE: await asyncio.to_thread(refresh_all_cache)
 
-        # 全体市場を動かしているメインテーマ（トランプ/原油/為替/金利等）を解析
         main_driver = await asyncio.to_thread(fetch_market_driver_context)
-
         full_report = (
             f"🌐 **【10大業界 イベント・市場要因による株価変動解析】**\n"
             f"📌 **現在の相場主導要因**: `{main_driver}`\n"
@@ -388,8 +312,6 @@ class InstitutionalBoardView(View):
                     line_items.append(f"`{tech['code']}`:{tag}{tech['change']}%")
             
             avg_change = float(np.mean(changes)) if changes else 0.0
-
-            # 💡 なぜその動向になったのかの因果関係解説文を生成
             impact_story = generate_sector_impact_analysis(sector_name, avg_change, main_driver)
 
             full_report += (
@@ -398,13 +320,11 @@ class InstitutionalBoardView(View):
                 f"└ {impact_story}\n\n"
             )
 
-        await send_to_channel(interaction.channel, full_report)
+        await self.send_to_general_channel(interaction, full_report)
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_breakout_signals_perm")
     async def breakout_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        if not DATA_CACHE:
-            await asyncio.to_thread(refresh_all_cache)
+        if not DATA_CACHE: await asyncio.to_thread(refresh_all_cache)
 
         sorted_items = sorted(DATA_CACHE.values(), key=lambda x: x['score'], reverse=True)
         high_score_items = [t for t in sorted_items if t['score'] >= 60][:8]
@@ -421,13 +341,12 @@ class InstitutionalBoardView(View):
                     f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **RSI**: `{t['rsi']}`\n"
                     f"└ 💡 **評価**: {get_future_action_eval(t)}\n\n"
                 )
-        await send_to_channel(interaction.channel, res)
+
+        await self.send_to_general_channel(interaction, res)
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_volume_spikes_perm")
     async def volume_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer()
-        if not DATA_CACHE:
-            await asyncio.to_thread(refresh_all_cache)
+        if not DATA_CACHE: await asyncio.to_thread(refresh_all_cache)
 
         spikes = [t for t in DATA_CACHE.values() if t['vol_ratio'] >= 1.3]
         spikes.sort(key=lambda x: x['vol_ratio'], reverse=True)
@@ -443,7 +362,8 @@ class InstitutionalBoardView(View):
                     f"├ **現在値**: {t['price']}{unit} ({t['change']}%) | **需給バランス比**: `{t['bid_ask_ratio']}`\n"
                     f"└ 🧠 **大口評価**: {'大口の本格買い集め・板上抜け動向。' if t['change'] > 0 else '大口の売り浴びせ・戻り売り警戒。'}\n\n"
                 )
-        await send_to_channel(interaction.channel, res)
+
+        await self.send_to_general_channel(interaction, res)
 
 intents = discord.Intents.default()
 intents.message_content = True
