@@ -163,7 +163,7 @@ def get_exact_jp_stock_data(code: str):
         print(f"Kabutan Scraping Error ({code}): {e}")
         return None
 
-# 米国株のスクレイピング（yfinance不使用）
+# 米国株の直接取得
 def get_us_stock_data_direct(symbol: str):
     url = f"https://finance.yahoo.com/quote/{symbol}/"
     headers = {
@@ -175,8 +175,6 @@ def get_us_stock_data_direct(symbol: str):
             return {"price": 150.0, "change": 0.0, "mcap_billion": 5000.0}
             
         soup = BeautifulSoup(res.text, "html.parser")
-        
-        # 価格要素
         price_span = soup.find("fin-streamer", {"data-field": "regularMarketPrice", "data-symbol": symbol})
         change_span = soup.find("fin-streamer", {"data-field": "regularMarketChangePercent", "data-symbol": symbol})
         
@@ -193,14 +191,12 @@ def get_us_stock_data_direct(symbol: str):
         return {"price": price, "change": change, "mcap_billion": 10000.0}
     except Exception as e:
         print(f"US Direct Fetch Warning ({symbol}): {e}")
-        # フォールバック（エラーで止めない）
         return {"price": 100.0, "change": 0.0, "mcap_billion": 5000.0}
 
 def fetch_ticker_full_analysis(ticker: str):
     try:
         is_jp = ticker.endswith(".T")
 
-        # 日本株
         if is_jp:
             jp_data = get_exact_jp_stock_data(ticker)
             if not jp_data:
@@ -237,7 +233,6 @@ def fetch_ticker_full_analysis(ticker: str):
                 "score": min(max(int(base_score), 10), 100)
             }
 
-        # 米国株 (yfinanceを完全にスルー)
         us_data = get_us_stock_data_direct(ticker)
         current_price = us_data["price"]
         day_change = us_data["change"]
@@ -310,7 +305,9 @@ def analyze_single_ticker(code_input: str):
 class StockSearchModal(Modal, title="銘柄多角解析"):
     stock_code = TextInput(label="銘柄コードを入力", placeholder="例: 7013, 8035, NVDA")
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        # 安全なレスポンス処理
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
         res = await asyncio.to_thread(analyze_single_ticker, self.stock_code.value)
         
         general_channel = interaction.client.get_channel(GENERAL_CHANNEL_ID)
@@ -338,7 +335,10 @@ class InstitutionalBoardView(View):
         for chunk in chunks:
             await target_channel.send(chunk)
             
-        await interaction.followup.send("✅ 解析完了！結果を出力しました。", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message("✅ 解析完了！結果を出力しました。", ephemeral=True)
+        else:
+            await interaction.followup.send("✅ 解析完了！結果を出力しました。", ephemeral=True)
 
     @discord.ui.button(label="🔍 銘柄詳細解析", style=discord.ButtonStyle.success, custom_id="search_stock_modal_perm")
     async def search_button(self, interaction: discord.Interaction, button: Button):
@@ -346,7 +346,9 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🌐 各業界 ニュース・資金動向", style=discord.ButtonStyle.primary, custom_id="fetch_sector_flow_perm")
     async def sector_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
+        # 重複レスポンス防止チェック
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
 
         if not DATA_CACHE:
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
@@ -383,7 +385,8 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="🎯 押し目・高値突破シグナル", style=discord.ButtonStyle.secondary, custom_id="fetch_breakout_signals_perm")
     async def breakout_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
 
         if not DATA_CACHE:
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
@@ -410,7 +413,8 @@ class InstitutionalBoardView(View):
 
     @discord.ui.button(label="⚡ 大口売買・板突破動向", style=discord.ButtonStyle.danger, custom_id="fetch_volume_spikes_perm")
     async def volume_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
 
         if not DATA_CACHE:
             asyncio.create_task(asyncio.to_thread(refresh_all_cache))
