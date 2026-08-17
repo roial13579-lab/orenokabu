@@ -1,8 +1,5 @@
-discord.py
-yfinance
-pandas
-numpy
+streamlit
 requests
 beautifulsoup4
-curl_cffi
-
+pandas
+numpy
