@@ -1,9 +1,6 @@
 import streamlit as st
-import requests
-import re
 import pandas as pd
-import numpy as np
-from bs4 import BeautifulSoup
+import yfinance as yf
 
 # --- ページ基本設定 ---
 st.set_page_config(
@@ -27,34 +24,38 @@ SECTORS = {
     "10.電気精密": ["6501.T", "6758.T", "6503.T", "7751.T", "6752.T"]
 }
 
-# --- 株価取得ロジック（キャッシュ機能付きで高速化） ---
+# 全銘柄リストの作成
+ALL_TICKERS = [ticker for tickers in SECTORS.values() for ticker in tickers]
+
+# --- 株価取得ロジック（yfinanceで一括高速取得） ---
 @st.cache_data(ttl=300)
-def fetch_stock(ticker):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    if ticker.endswith(".T"):
-        clean_code = ticker.replace(".T", "")
-        url = f"https://finance.yahoo.co.jp/quote/{clean_code}.T"
-        try:
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                match = re.search(r"(\d{1,3}(?:,\d{3})*|\d+)\s*[-+]\d+(?:\,\d+)*(?:\.\d+)?\s*([+-]?\d+\.\d+)%", soup.get_text())
-                if match:
-                    return {"code": clean_code, "price": float(match.group(1).replace(",", "")), "change": float(match.group(2)), "is_us": False}
-        except Exception: pass
-    else:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=2d"
-        try:
-            res = requests.get(url, headers=headers, timeout=5)
-            if res.status_code == 200:
-                meta = res.json()["chart"]["result"][0]["meta"]
-                price = float(meta.get("regularMarketPrice", 0.0))
-                prev = float(meta.get("chartPreviousClose", price))
-                if price > 0 and prev > 0:
+def fetch_all_stocks():
+    try:
+        # 50銘柄を一括ダウンロード
+        data = yf.download(ALL_TICKERS, period="5d", interval="1d", progress=False)["Close"]
+        
+        result = {}
+        for ticker in ALL_TICKERS:
+            if ticker in data.columns:
+                series = data[ticker].dropna()
+                if len(series) >= 2:
+                    price = float(series.iloc[-1])
+                    prev = float(series.iloc[-2])
                     change = round(((price - prev) / prev) * 100, 2)
-                    return {"code": ticker, "price": price, "change": change, "is_us": True}
-        except Exception: pass
-    return {"code": ticker, "price": 0.0, "change": 0.0, "is_us": False}
+                    is_us = not ticker.endswith(".T")
+                    clean_code = ticker.replace(".T", "")
+                    result[ticker] = {
+                        "code": clean_code,
+                        "price": price,
+                        "change": change,
+                        "is_us": is_us
+                    }
+            if ticker not in result:
+                result[ticker] = {"code": ticker.replace(".T", ""), "price": 0.0, "change": 0.0, "is_us": False}
+        return result
+    except Exception as e:
+        st.error(f"データ取得エラー: {e}")
+        return {}
 
 # --- 更新ボタン ---
 col1, col2 = st.columns([1, 4])
@@ -65,15 +66,17 @@ with col1:
 
 st.divider()
 
+# --- データ取得 ---
+stock_data = fetch_all_stocks()
+
 # --- 画面表示 ---
 for sector_name, tickers in SECTORS.items():
     st.subheader(sector_name)
-    
     cols = st.columns(len(tickers))
     changes = []
     
     for idx, ticker in enumerate(tickers):
-        data = fetch_stock(ticker)
+        data = stock_data.get(ticker, {"code": ticker.replace(".T", ""), "price": 0.0, "change": 0.0, "is_us": False})
         changes.append(data["change"])
         
         unit = "$" if data["is_us"] else "¥"
@@ -86,6 +89,6 @@ for sector_name, tickers in SECTORS.items():
                 delta=f"{data['change']:+.2f}%"
             )
             
-    avg_change = float(np.mean(changes)) if changes else 0.0
+    avg_change = sum(changes) / len(changes) if changes else 0.0
     st.caption(f"業界平均変動率: **{avg_change:+.2f}%**")
     st.divider()
