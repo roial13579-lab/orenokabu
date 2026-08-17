@@ -70,28 +70,38 @@ def calculate_indicators(df):
     df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
     return df
 
-@st.cache_data(ttl=300)
+# データ取得の高速化（キャッシュ有効化で画面切り替え時のラグを解消）
+@st.cache_data(ttl=600)
 def fetch_data():
     return yf.download(list(ALL_TICKERS.keys()), period="1y", interval="1d", group_by="ticker", progress=False)
+
+# 企業ファンダメンタルズ（経営・期待値・財務）データの取得（高速化）
+@st.cache_data(ttl=3600)
+def fetch_info_data(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        return t.info
+    except Exception:
+        return {}
 
 data_dict = fetch_data()
 
 # --- セッション状態の初期化 ---
 if "target_ticker" not in st.session_state:
     st.session_state.target_ticker = "8035.T"
-if "current_mode" not in st.session_state:
-    st.session_state.current_mode = "📊 業界一覧（トップ5 vs 期待5）"
+if "nav_mode" not in st.session_state:
+    st.session_state.nav_mode = "📊 業界一覧（トップ5 vs 期待5）"
 
-# 銘柄選択・遷移用関数
+# 銘柄選択・遷移用コールバック（高速画面遷移）
 def go_to_detail(ticker):
     st.session_state.target_ticker = ticker
-    st.session_state.current_mode = "📈 個別銘柄詳細＆売買アドバイス"
+    st.session_state.nav_mode = "📈 個別銘柄詳細＆売買アドバイス"
 
 # --- サイドバーナビゲーション ---
 mode = st.sidebar.radio(
     "機能切り替え",
     ["📊 業界一覧（トップ5 vs 期待5）", "📈 個別銘柄詳細＆売買アドバイス", "🚀 テンバガー（急騰）候補"],
-    key="current_mode"
+    key="nav_mode"
 )
 
 # ==========================================
@@ -99,7 +109,7 @@ mode = st.sidebar.radio(
 # ==========================================
 if mode == "📊 業界一覧（トップ5 vs 期待5）":
     st.header("📊 業界別：トップ5社 vs 長期期待5社")
-    st.caption("💡 銘柄のボタンを押すと、直接チャート・分析画面へ遷移します。")
+    st.caption("💡 銘柄名や「📈 分析」ボタンを押すと、即座に個別分析画面に遷移します。")
     
     for sector_name, info in SECTOR_DATA.items():
         st.subheader(f"🏢 {sector_name}")
@@ -120,12 +130,12 @@ if mode == "📊 業界一覧（トップ5 vs 期待5）":
                         unit = "$" if is_us else "¥"
                         
                         with cols[idx]:
+                            st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{ticker}", on_click=go_to_detail, args=(ticker,), type="primary")
                             st.metric(
-                                label=f"{name} ({ticker.replace('.T','')})",
+                                label=f"{name}",
                                 value=f"{unit}{latest['Close']:,.1f}",
                                 delta=f"{change:+.2f}%"
                             )
-                            st.button(f"📈 分析を見る", key=f"btn_sec_{ticker}", on_click=go_to_detail, args=(ticker,))
                     except Exception:
                         with cols[idx]:
                             st.write(f"取得失敗: {name}")
@@ -134,7 +144,7 @@ if mode == "📊 業界一覧（トップ5 vs 期待5）":
 # 📈 個別銘柄詳細＆売買アドバイス
 # ==========================================
 elif mode == "📈 個別銘柄詳細＆売買アドバイス":
-    st.header("📈 個別銘柄テクニカル＆当日の株価詳細")
+    st.header("📈 個別銘柄テクニカル＆株価要因分析")
     
     selected_ticker = st.selectbox(
         "銘柄を選択してください",
@@ -164,7 +174,77 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
     m4.metric("安値 (Low)", f"{unit}{latest['Low']:,.1f}")
     m5.metric("前日終値", f"{unit}{prev['Close']:,.1f}")
     
-    # --- チャート表示（ズーム・スライダー強化） ---
+    # --- 株価影響要因の具体分析（経営・期待値・財務） ---
+    st.markdown("### 🔍 株価への具体的影響要因（ファンダメンタルズ分析）")
+    info = fetch_info_data(selected_ticker)
+    
+    f1, f2, f3 = st.columns(3)
+    
+    with f1:
+        st.subheader("🏢 経営面（本業・収益性）")
+        profit_margin = info.get("profitMargins", None)
+        roe = info.get("returnOnEquity", None)
+        rev_growth = info.get("revenueGrowth", None)
+        
+        reasons_m = []
+        if profit_margin is not None and profit_margin > 0.15:
+            reasons_m.append(f"✅ **高収益体質**: 利益率 {profit_margin*100:.1f}% と高く本業の競争力が強力。")
+        elif profit_margin is not None and profit_margin < 0.03:
+            reasons_m.append(f"⚠️ **収益力低下**: 利益率 {profit_margin*100:.1f}% と低調。コスト高・需要減の影響懸念。")
+            
+        if rev_growth is not None and rev_growth > 0.1:
+            reasons_m.append(f"🚀 **売上高拡大**: 前年比 +{rev_growth*100:.1f}% 成長。事業拡大が株価を下支え。")
+        elif rev_growth is not None and rev_growth < 0:
+            reasons_m.append(f"🔻 **減収懸念**: 前年比 {rev_growth*100:.1f}% 減減。業績悪化が売り圧力に。")
+            
+        if not reasons_m:
+            reasons_m.append("本業の収益性・売上高成長率は概ね標準水準で推移中。")
+            
+        st.write("\n\n".join(reasons_m))
+
+    with f2:
+        st.subheader("🎯 期待値（市場評価・PER/PBR）")
+        per = info.get("trailingPE", None)
+        pbr = info.get("priceToBook", None)
+        
+        reasons_e = []
+        if per is not None:
+            if per > 35:
+                reasons_e.append(f"🔥 **高期待/プレミアム重視 (PER {per:.1f}倍)**: 今後の急成長が織り込まれており、決算等での落差リスクに注意。")
+            elif per < 12:
+                reasons_e.append(f"💡 **割安放置/見直し期待 (PER {per:.1f}倍)**: 市場の関心が薄いが、評価見直しで上昇余地あり。")
+            else:
+                reasons_e.append(f"📊 **適正な市場評価 (PER {per:.1f}倍)**: 過度な買われすぎ・売られすぎ感のない妥当水準。")
+                
+        if pbr is not None and pbr < 1.0:
+            reasons_e.append(f"📢 **PBR1倍割れ ({pbr:.2f}倍)**: 東証の改善要請に伴い、株主還元・自社株買い期待の買い要因。")
+            
+        if not reasons_e:
+            reasons_e.append("市場からの評価水準はニュートラルで大きな偏りは見られません。")
+            
+        st.write("\n\n".join(reasons_e))
+
+    with f3:
+        st.subheader("🛡️ 財務面（安全性・還元力）")
+        debt_to_eq = info.get("debtToEquity", None)
+        div_yield = info.get("dividendYield", None)
+        
+        reasons_f = []
+        if debt_to_eq is not None:
+            if debt_to_eq < 50:
+                reasons_f.append(f"🏰 **財務健全**: 負債比率が低く金利上昇局面でも堅牢なリスク耐性。")
+            elif debt_to_eq > 200:
+                reasons_f.append(f"⚠️ **有利子負債多重**: 金利上昇が財務負担・経営圧迫につながる懸念あり。")
+                
+        if div_yield is not None and div_yield > 0.03:
+            reasons_f.append(f"💰 **高配当インカム魅力 ({div_yield*100:.2f}%)**: 配当利回りが高く、下値を支える強い要素。")
+            
+        if not reasons_f:
+            reasons_f.append("財務リスクは低く、事業継続性に特段の不安要素なし。")
+            
+        st.write("\n\n".join(reasons_f))
+
+    # --- チャート表示 ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ローソク足'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA5'], name='5日線(短期)', line=dict(color='orange', width=1)), row=1, col=1)
@@ -173,7 +253,6 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='出来高', marker_color='cadetblue'), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI(14)', line=dict(color='green')), row=3, col=1)
     
-    # 拡大・レンジ切替ボタンの追加
     fig.update_xaxes(
         rangeselector=dict(
             buttons=list([
@@ -183,13 +262,12 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
                 dict(step="all", label="全期間")
             ])
         ),
-        rangeslider=dict(visible=True),  # チャート下部のスライダーで自由な拡大縮小が可能
+        rangeslider=dict(visible=True),
         type="date"
     )
-    fig.update_layout(height=700, template="plotly_white")
+    fig.update_layout(height=650, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("🔍 **拡大方法**: チャート上のドラッグ、マウスホイール、下部スライダー、または左上の「1ヶ月/3ヶ月」ボタンで拡大表示できます。")
-    
+
     # --- 短期・中期・長期 売買アドバイス ---
     st.markdown("### 🎯 期間別テクニカル判定＆買いアドバイス")
     c1, c2, c3 = st.columns(3)
@@ -235,7 +313,7 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
 # ==========================================
 elif mode == "🚀 テンバガー（急騰）候補":
     st.header("🚀 テンバガー（急騰）候補スクリーニング")
-    st.caption("シグナルを検出したすべての銘柄を表示しています。「📈 分析を見る」ボタンを押すと即座に詳細へ遷移します。")
+    st.caption("一番左の「📈 分析」ボタンを押すことで、即座に対象銘柄の個別分析画面に移動できます。")
     
     results = []
     for ticker, name in ALL_TICKERS.items():
@@ -287,16 +365,18 @@ elif mode == "🚀 テンバガー（急騰）候補":
         results = sorted(results, key=lambda x: x['score'], reverse=True)
         st.write(f"**該当件数: 全 {len(results)} 件**")
         
-        # ボタン付きカード形式で件数制限なしで表示
+        # 最左列に「分析」ボタンを配置したカードレイアウト
         for res in results:
             with st.container():
-                col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 3, 3, 1.5])
-                col1.markdown(f"**{res['code']}**\n{res['name']}")
-                col2.markdown(f"**価格**: {res['price']}\n**スコア**: {res['score']}")
-                col3.markdown(f"**シグナル**:\n{res['reasons']}")
-                col4.markdown(f"**推奨アクション**:\n{res['actions']}")
-                with col5:
-                    st.button("📈 分析を見る", key=f"btn_tb_{res['ticker']}", on_click=go_to_detail, args=(res['ticker'],))
+                col_btn, col_code, col_price, col_sig, col_act = st.columns([1.8, 2, 2, 3, 3])
+                
+                with col_btn:
+                    st.button(f"📈 分析画面へ", key=f"btn_tb_{res['ticker']}", on_click=go_to_detail, args=(res['ticker'],), type="primary")
+                    
+                col_code.markdown(f"**{res['code']}**\n\n{res['name']}")
+                col_price.markdown(f"**株価**: {res['price']}\n\n**スコア**: {res['score']}")
+                col_sig.markdown(f"**検出シグナル**:\n\n{res['reasons']}")
+                col_act.markdown(f"**推奨アクション**:\n\n{res['actions']}")
                 st.divider()
     else:
         st.info("現在、急騰シグナル条件に合致する銘柄はありません。")
