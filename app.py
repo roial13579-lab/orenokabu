@@ -43,13 +43,11 @@ SECTOR_DATA = {
     }
 }
 
-# 全銘柄リストの抽出
 ALL_TICKERS = {}
 for s, v in SECTOR_DATA.items():
     ALL_TICKERS.update(v["top5"])
     ALL_TICKERS.update(v["future5"])
 
-# --- テクニカル指標計算 ---
 def calculate_indicators(df):
     df['SMA5'] = df['Close'].rolling(window=5).mean()
     df['SMA25'] = df['Close'].rolling(window=25).mean()
@@ -81,15 +79,27 @@ data_dict = fetch_data()
 # --- セッション状態の初期化 ---
 if "target_ticker" not in st.session_state:
     st.session_state.target_ticker = "8035.T"
+if "current_mode" not in st.session_state:
+    st.session_state.current_mode = "📊 業界一覧（トップ5 vs 期待5）"
+
+# 銘柄選択・遷移用関数
+def go_to_detail(ticker):
+    st.session_state.target_ticker = ticker
+    st.session_state.current_mode = "📈 個別銘柄詳細＆売買アドバイス"
 
 # --- サイドバーナビゲーション ---
-mode = st.sidebar.radio("機能切り替え", ["📊 業界一覧（トップ5 vs 期待5）", "📈 個別銘柄詳細＆売買アドバイス", "🚀 テンバガー（急騰）候補"])
+mode = st.sidebar.radio(
+    "機能切り替え",
+    ["📊 業界一覧（トップ5 vs 期待5）", "📈 個別銘柄詳細＆売買アドバイス", "🚀 テンバガー（急騰）候補"],
+    key="current_mode"
+)
 
 # ==========================================
 # 📊 業界一覧（トップ5 vs 期待5）
 # ==========================================
 if mode == "📊 業界一覧（トップ5 vs 期待5）":
     st.header("📊 業界別：トップ5社 vs 長期期待5社")
+    st.caption("💡 銘柄のボタンを押すと、直接チャート・分析画面へ遷移します。")
     
     for sector_name, info in SECTOR_DATA.items():
         st.subheader(f"🏢 {sector_name}")
@@ -115,6 +125,7 @@ if mode == "📊 業界一覧（トップ5 vs 期待5）":
                                 value=f"{unit}{latest['Close']:,.1f}",
                                 delta=f"{change:+.2f}%"
                             )
+                            st.button(f"📈 分析を見る", key=f"btn_sec_{ticker}", on_click=go_to_detail, args=(ticker,))
                     except Exception:
                         with cols[idx]:
                             st.write(f"取得失敗: {name}")
@@ -153,7 +164,7 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
     m4.metric("安値 (Low)", f"{unit}{latest['Low']:,.1f}")
     m5.metric("前日終値", f"{unit}{prev['Close']:,.1f}")
     
-    # --- チャート表示 ---
+    # --- チャート表示（ズーム・スライダー強化） ---
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ローソク足'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA5'], name='5日線(短期)', line=dict(color='orange', width=1)), row=1, col=1)
@@ -161,15 +172,28 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA75'], name='75日線(長期)', line=dict(color='purple', width=1)), row=1, col=1)
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='出来高', marker_color='cadetblue'), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI(14)', line=dict(color='green')), row=3, col=1)
-    fig.update_layout(height=600, xaxis_rangeslider_visible=False, template="plotly_white")
+    
+    # 拡大・レンジ切替ボタンの追加
+    fig.update_xaxes(
+        rangeselector=dict(
+            buttons=list([
+                dict(count=1, label="1ヶ月", step="month", stepmode="backward"),
+                dict(count=3, label="3ヶ月", step="month", stepmode="backward"),
+                dict(count=6, label="6ヶ月", step="month", stepmode="backward"),
+                dict(step="all", label="全期間")
+            ])
+        ),
+        rangeslider=dict(visible=True),  # チャート下部のスライダーで自由な拡大縮小が可能
+        type="date"
+    )
+    fig.update_layout(height=700, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("🔍 **拡大方法**: チャート上のドラッグ、マウスホイール、下部スライダー、または左上の「1ヶ月/3ヶ月」ボタンで拡大表示できます。")
     
     # --- 短期・中期・長期 売買アドバイス ---
     st.markdown("### 🎯 期間別テクニカル判定＆買いアドバイス")
-    
     c1, c2, c3 = st.columns(3)
     
-    # 短期（5日線・RSI・ピンバー）
     with c1:
         st.subheader("⏱️ 短期（数日〜1週間）")
         if latest['Pinbar'] or latest['RSI'] < 30:
@@ -182,7 +206,6 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
             st.error("🔴 **静観 / 売り検討**")
             st.caption("**理由**: 5日線を下回り短期弱気モード。")
 
-    # 中期（25日線・ゴールデンクロス）
     with c2:
         st.subheader("📅 中期（数週間〜数ヶ月）")
         if latest['SMA5'] > latest['SMA25'] and prev['SMA5'] <= prev['SMA25']:
@@ -195,7 +218,6 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
             st.error("🔴 **静観（トレンド悪化）**")
             st.caption("**理由**: 25日線を割り込んでおり、中期的な調整リスクあり。")
 
-    # 長期（75日線・パーフェクトオーダー）
     with c3:
         st.subheader("🏛️ 長期（半年〜数年）")
         if latest['SMA5'] > latest['SMA25'] > latest['SMA75']:
@@ -208,22 +230,12 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
             st.error("🔴 **見送り**")
             st.caption("**理由**: 長期トレンドが下降傾向。買いは慎重に。")
 
-    # 板情報
-    st.markdown("### 📋 板情報（気配値データ）")
-    lp = int(latest['Close']) if not is_us else round(latest['Close'], 2)
-    board_data = {
-        "売気配数量": [1200, 3500, 800, 2300, 1500, "", "", "", "", ""],
-        "気配株価": [lp+5, lp+4, lp+3, lp+2, lp+1, lp, lp-1, lp-2, lp-3, lp-4],
-        "買気配数量": ["", "", "", "", "", 4500, 1800, 2900, 5100, 1200]
-    }
-    st.table(pd.DataFrame(board_data))
-
 # ==========================================
 # 🚀 テンバガー（急騰）候補
 # ==========================================
 elif mode == "🚀 テンバガー（急騰）候補":
     st.header("🚀 テンバガー（急騰）候補スクリーニング")
-    st.markdown("シグナルを検出した銘柄一覧です。**銘柄を選択してボタンを押すと、個別詳細へ移動できます。**")
+    st.caption("シグナルを検出したすべての銘柄を表示しています。「📈 分析を見る」ボタンを押すと即座に詳細へ遷移します。")
     
     results = []
     for ticker, name in ALL_TICKERS.items():
@@ -241,51 +253,50 @@ elif mode == "🚀 テンバガー（急騰）候補":
             if latest['Vol_Ratio'] >= 2.0:
                 score += 30
                 reasons.append(f"出来高急増({latest['Vol_Ratio']:.1f}倍)")
-                actions.append("大口資金流入の可能性。打診買いを検討")
+                actions.append("大口資金流入。打診買い検討")
                 
             if latest['Pinbar']:
                 score += 25
-                reasons.append("下ひげピンバー(底打ち)")
-                actions.append("売り一巡後の反発サイン。指値で拾う準備")
+                reasons.append("下ひげ(底打ち)")
+                actions.append("反発サイン。指値買い準備")
                 
             if prev['SMA5'] <= prev['SMA25'] and latest['SMA5'] > latest['SMA25']:
                 score += 25
                 reasons.append("5日線×25日線 GC")
-                actions.append("上昇トレンド開始。順張り買いを追加")
+                actions.append("上昇開始。順張り追加")
                 
             if prev['RSI'] < 35 and latest['RSI'] > prev['RSI']:
                 score += 20
                 reasons.append(f"RSI反発({latest['RSI']:.1f}%)")
-                actions.append("セリングクライマックス通過。反発狙いエントリー")
+                actions.append("セリクラ通過。エントリー検討")
                 
             if score > 0:
                 results.append({
                     "ticker": ticker,
-                    "コード": ticker.replace(".T", ""),
-                    "会社名": name,
-                    "現在株価": f"{latest['Close']:,.1f}",
-                    "急騰スコア": score,
-                    "検出シグナル": " / ".join(reasons),
-                    "推奨アクション": " / ".join(actions)
+                    "code": ticker.replace(".T", ""),
+                    "name": name,
+                    "price": f"{latest['Close']:,.1f}",
+                    "score": score,
+                    "reasons": " / ".join(reasons),
+                    "actions": " / ".join(actions)
                 })
         except Exception:
             continue
             
-    res_df = pd.DataFrame(results)
-    if not res_df.empty:
-        res_df = res_df.sort_values(by="急騰スコア", ascending=False).reset_index(drop=True)
+    if results:
+        results = sorted(results, key=lambda x: x['score'], reverse=True)
+        st.write(f"**該当件数: 全 {len(results)} 件**")
         
-        # 画面表示用のテーブル
-        st.dataframe(res_df[["コード", "会社名", "現在株価", "急騰スコア", "検出シグナル", "推奨アクション"]], use_container_width=True)
-        
-        st.markdown("### 🔍 個別分析へスキップ")
-        selected_cand = st.selectbox(
-            "詳細をみたい急騰候補銘柄を選んでください",
-            options=res_df["ticker"].tolist(),
-            format_func=lambda x: f"{x.replace('.T', '')} - {ALL_TICKERS.get(x, '')}"
-        )
-        if st.button("📈 この銘柄の個別チャート・アドバイスを見る", type="primary"):
-            st.session_state.target_ticker = selected_cand
-            st.rerun()
+        # ボタン付きカード形式で件数制限なしで表示
+        for res in results:
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 3, 3, 1.5])
+                col1.markdown(f"**{res['code']}**\n{res['name']}")
+                col2.markdown(f"**価格**: {res['price']}\n**スコア**: {res['score']}")
+                col3.markdown(f"**シグナル**:\n{res['reasons']}")
+                col4.markdown(f"**推奨アクション**:\n{res['actions']}")
+                with col5:
+                    st.button("📈 分析を見る", key=f"btn_tb_{res['ticker']}", on_click=go_to_detail, args=(res['ticker'],))
+                st.divider()
     else:
         st.info("現在、急騰シグナル条件に合致する銘柄はありません。")
