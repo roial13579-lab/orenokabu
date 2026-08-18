@@ -161,14 +161,17 @@ data_dict = fetch_data()
 if "target_ticker" not in st.session_state:
     st.session_state.target_ticker = ""
 
+# 画面遷移と銘柄選択の処理（st.rerunを追加して確実に画面更新）
 def select_ticker(ticker):
     st.session_state.target_ticker = ticker
     st.session_state.nav_mode = "📈 個別銘柄詳細＆深掘り分析"
+    st.rerun()
 
 def clear_ticker():
     st.session_state.target_ticker = ""
+    st.rerun()
 
-# サイドバー
+# サイドバーナビゲーション
 mode = st.sidebar.radio(
     "機能選択",
     ["📊 10大業界＆米国株トップ10", "📈 個別銘柄詳細＆深掘り分析", "🚀 テンバガー（急騰）候補"],
@@ -241,7 +244,7 @@ if mode == "📊 10大業界＆米国株トップ10":
                     latest = df.iloc[-1]
                     prev = df.iloc[-2]
                     change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-                    st.button(f"📈 分析 ({ticker})", key=f"btn_us_{ticker}", on_click=select_ticker, args=(ticker,), type="primary")
+                    st.button(f"📈 分析 ({ticker})", key=f"btn_us_{ticker}", on_click=select_ticker, args=(ticker,))
                     st.metric(label=f"{name}", value=f"${latest['Close']:,.1f}", delta=f"{change:+.2f}%")
                 else:
                     st.write(f"取得失敗: {name}")
@@ -268,7 +271,7 @@ if mode == "📊 10大業界＆米国株トップ10":
                         latest = df.iloc[-1]
                         prev = df.iloc[-2]
                         change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-                        st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{sector_name}_{ticker}", on_click=select_ticker, args=(ticker,), type="primary")
+                        st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{sector_name}_{ticker}", on_click=select_ticker, args=(ticker,))
                         st.metric(label=f"{name}", value=f"{unit}{latest['Close']:,.1f}", delta=f"{change:+.2f}%")
                     else:
                         st.write(f"取得失敗: {name}")
@@ -281,7 +284,7 @@ elif mode == "📈 個別銘柄詳細＆深掘り分析":
     
     # 銘柄が選択されている時のみ「トップへ戻る」ボタンを表示
     if st.session_state.target_ticker != "":
-        st.button("⬅️ 個別銘柄トップ（10大業界一覧）に戻る", on_click=clear_ticker, type="secondary")
+        st.button("⬅️ 個別銘柄トップ（10大業界一覧）に戻る", on_click=clear_ticker)
 
     # 検索バー
     search_options = [""] + list(ALL_TICKERS.keys())
@@ -299,6 +302,7 @@ elif mode == "📈 個別銘柄詳細＆深掘り分析":
     
     if selected_from_box != st.session_state.target_ticker:
         st.session_state.target_ticker = selected_from_box
+        st.rerun()
 
     selected_ticker = st.session_state.target_ticker
 
@@ -390,7 +394,7 @@ elif mode == "📈 個別銘柄詳細＆深掘り分析":
             cols = st.columns(5)
             for idx, (ticker, name) in enumerate(sec_info["top10"].items()):
                 with cols[idx % 5]:
-                    st.button(f"📈 分析 ({name})", key=f"top_page_{sec_name}_{ticker}", on_click=select_ticker, args=(ticker,), type="primary")
+                    st.button(f"📈 分析 ({name})", key=f"top_page_{sec_name}_{ticker}", on_click=select_ticker, args=(ticker,))
 
 # ==========================================
 # 🚀 テンバガー（急騰）候補
@@ -438,7 +442,7 @@ elif mode == "🚀 テンバガー（急騰）候補":
             with st.container():
                 col_btn, col_code, col_price, col_sig, col_act = st.columns([1.8, 2, 2, 3, 3])
                 with col_btn:
-                    st.button(f"📈 分析画面へ", key=f"btn_tb_{res['ticker']}", on_click=select_ticker, args=(res['ticker'],), type="primary")
+                    st.button(f"📈 分析画面へ", key=f"btn_tb_{res['ticker']}", on_click=select_ticker, args=(res['ticker'],))
                 col_code.markdown(f"**{res['code']}**\n\n{res['name']}")
                 col_price.markdown(f"**株価**: {res['price']}\n\n**スコア**: {res['score']}")
                 col_sig.markdown(f"**検出シグナル**:\n\n{res['reasons']}")
