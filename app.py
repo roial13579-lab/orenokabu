@@ -5,48 +5,107 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# --- ページ設定 ---
+# --- ページ基本設定 ---
 st.set_page_config(
-    page_title="俺の株ダッシュボード PRO+",
+    page_title="株ダッシュボード PRO+ 10大業界",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 10大業界 株価・テクニカル・テンバガー分析 PRO+")
-
-# --- 10大業界：トップ5社 ＆ 長期的期待5社 ---
+# --- 10大業界データ・流入背景・注目イベント・トップ10銘柄 ---
 SECTOR_DATA = {
     "1.半導体": {
-        "top5": {"8035.T": "東京エレクトロン", "6857.T": "アドバンテスト", "6146.T": "ディスコ", "6920.T": "レーザーテック", "NVDA": "NVIDIA"},
-        "future5": {"6723.T": "ルネサス", "7735.T": "SCREEN HD", "6758.T": "ソニーグループ", "ASML": "ASML", "TSM": "TSMC"},
-        "event": "AI需要加速、次世代プロセス競争、為替ドルの影響"
+        "bg": "生成AIマーケットの爆発的拡大とデータセンター投資の加速。政府の国内製造拠点への手厚い補助金政策も強力な追い風。",
+        "top10": {
+            "8035.T": "東京エレクトロン", "6857.T": "アドバンテスト", "6146.T": "ディスコ", "6920.T": "レーザーテック", "NVDA": "NVIDIA",
+            "6723.T": "ルネサス", "7735.T": "SCREEN HD", "6758.T": "ソニーグループ", "ASML": "ASML", "TSM": "TSMC"
+        },
+        "event": "次世代プロセス微細化競合、米国対中輸出規制の動向、主要AI・ビッグテック企業の設備投資計画"
     },
     "2.重工防衛": {
-        "top5": {"7011.T": "三菱重工業", "7012.T": "川崎重工業", "7013.T": "IHI", "6301.T": "小松製作所", "6367.T": "ダイキン工業"},
-        "future5": {"6208.T": "石川製作所", "6203.T": "豊和工業", "7003.T": "三井E&S", "LMT": "Lockheed Martin", "RTX": "RTX"},
-        "event": "防衛費増額政策、宇宙関連需要、インフラ更新投資"
+        "bg": "地政学リスクの高まりに伴う国家防衛費増額政策。宇宙開発や次世代インフラ更新需要の急増。",
+        "top10": {
+            "7011.T": "三菱重工業", "7012.T": "川崎重工業", "7013.T": "IHI", "6301.T": "小松製作所", "6367.T": "ダイキン工業",
+            "6208.T": "石川製作所", "6203.T": "豊和工業", "7003.T": "三井E&S", "LMT": "Lockheed Martin", "RTX": "RTX"
+        },
+        "event": "防衛予算閣議決定、装備品輸出制限の緩和議論、宇宙航空関連の新規ナショナルプロジェクト発足"
     },
     "3.自動車": {
-        "top5": {"7203.T": "トヨタ自動車", "7267.T": "ホンダ", "7270.T": "SUBARU", "7201.T": "日産自動車", "TSLA": "Tesla"},
-        "future5": {"7269.T": "スズキ", "7202.T": "いすゞ自動車", "6594.T": "ニデック", "RACE": "Ferrari", "BYDDF": "BYD"},
-        "event": "PHEV・ハイブリッド再評価、自動運転開発、円安メリット"
+        "bg": "EV急拡大の一巡に伴うハイブリッド・PHEV車の再評価。円安による輸出利益の底上げとSDV（ソフトウェア定義車両）化の加速。",
+        "top10": {
+            "7203.T": "トヨタ自動車", "7267.T": "ホンダ", "7270.T": "SUBARU", "7201.T": "日産自動車", "TSLA": "Tesla",
+            "7269.T": "スズキ", "7202.T": "いすゞ自動車", "6594.T": "ニデック", "RACE": "Ferrari", "BYDDF": "BYD"
+        },
+        "event": "為替レート変動、新興国市場でのEV普及ペース、次世代電池（全固体電池）の量産ロードマップ"
     },
     "4.大型金融": {
-        "top5": {"8306.T": "三菱UFJ FG", "8316.T": "三井住友 FG", "8411.T": "みずほ FG", "8604.T": "野村 HD", "8766.T": "東京海上 HD"},
-        "future5": {"8308.T": "りそな HD", "8309.T": "三井住友トラスト", "8630.T": "SOMPO HD", "8725.T": "MS&AD", "JPM": "JPMorgan Chase"},
-        "event": "日銀金利引き上げ観測、イールドカーブ変化、株主還元拡大"
+        "bg": "日銀の金利引き上げ局面における利ざや（貸出金利と預金金利の差）改善期待。東証改革に伴う大規模な自社株買い・増配の定着。",
+        "top10": {
+            "8306.T": "三菱UFJ FG", "8316.T": "三井住友 FG", "8411.T": "みずほ FG", "8604.T": "野村 HD", "8766.T": "東京海上 HD",
+            "8308.T": "りそな HD", "8309.T": "三井住友トラスト", "8630.T": "SOMPO HD", "8725.T": "MS&AD", "JPM": "JPMorgan Chase"
+        },
+        "event": "日銀金融政策決定会合の金利方針、イールドカーブ長短金利の動き、政策保有株の売却進捗状況"
     },
     "5.エネ資源": {
-        "top5": {"1605.T": "INPEX", "5020.T": "ENEOS HD", "5401.T": "日本製鉄", "4063.T": "信越化学工業", "XOM": "ExxonMobil"},
-        "future5": {"1518.T": "三井松島 HD", "5019.T": "出光興産", "5713.T": "住友金属鉱山", "CVX": "Chevron", "SHEL": "Shell"},
-        "event": "WTI原油価格動向、地政学リスク、脱炭素/GX投資"
+        "bg": "世界的なインフレ懸念と資源供給制限リスク。脱炭素（GX）投資と従来型エネルギーの収益最大化の併走。",
+        "top10": {
+            "1605.T": "INPEX", "5020.T": "ENEOS HD", "5401.T": "日本製鉄", "4063.T": "信越化学工業", "XOM": "ExxonMobil",
+            "1518.T": "三井松島 HD", "5019.T": "出光興産", "5713.T": "住友金属鉱山", "CVX": "Chevron", "SHEL": "Shell"
+        },
+        "event": "OPEC+の生産調整決定、WTI原油/LNG市場価格の乱高下、GX経済移行債の利活用展開"
+    },
+    "6.IT・通信": {
+        "bg": "DX（デジタルトランスフォーメーション）需要の定着とクラウド移行。通信料金改定の一巡と5G/6Gインフラ投資。",
+        "top10": {
+            "9432.T": "NTT", "9433.T": "KDDI", "9984.T": "ソフトバンクグループ", "4755.T": "楽天グループ", "9434.T": "ソフトバンク",
+            "MSFT": "Microsoft", "GOOGL": "Alphabet", "AAPL": "Apple", "ORCL": "Oracle", "ACN": "Accenture"
+        },
+        "event": "AIソリューション導入件数、ARPU（ユーザー平均単価）推移、自社株買い等の株主還元策"
+    },
+    "7.医薬品": {
+        "bg": "特許切れ（特許の壁）を克服するバイオ医薬品やmRNA技術へのシフト。世界的な高齢化に伴う医療需要の増大。",
+        "top10": {
+            "4502.T": "武田薬品工業", "4568.T": "第一三共", "4519.T": "中外製薬", "4503.T": "アステラス製薬", "4523.T": "エーザイ",
+            "LLY": "Eli Lilly", "NVO": "Novo Nordisk", "PFE": "Pfizer", "JNJ": "Johnson & Johnson", "MRK": "Merck"
+        },
+        "event": "新薬パイプラインの治験（Phase3等）成否、肥満症薬等の世界的販売拡大、薬価改定の影響"
+    },
+    "8.大手商社": {
+        "bg": "ウォーレン・バフェット率いるバークシャーの投資で世界的人気。資源利権と非資源事業（食料・IT等）の分散収益モデル。",
+        "top10": {
+            "8058.T": "三菱商事", "8001.T": "伊藤忠商事", "8031.T": "三井物産", "8015.T": "豊田通商", "8002.T": "丸紅",
+            "2768.T": "双日", "8053.T": "住友商事", "8020.T": "兼松", "BRK-B": "Berkshire Hathaway", "8028.T": "ユニゾHD"
+        },
+        "event": "配当方針（累進配当の維持・拡充）、海外大型案件のM&A動向、金属・エネルギー市場価格"
+    },
+    "9.不動産": {
+        "bg": "都心再開発事業による賃料水準の上昇とインバウンド需要に伴うホテル事業の好調。金利上昇局面での選別投資。",
+        "top10": {
+            "8801.T": "三井不動産", "8802.T": "三菱地所", "8830.T": "住友不動産", "3289.T": "東急不動産HD", "8804.T": "東京建物",
+            "PLD": "Prologis", "AMT": "American Tower", "EQIX": "Equinix", "SPG": "Simon Property", "O": "Realty Income"
+        },
+        "event": "都心オフィス空室率推移、地価公示価格の変動、借入金利（長期金利）の上昇ペース"
+    },
+    "10.消費・小売": {
+        "bg": "訪日外国人客（インバウンド）の消費拡大と価格転嫁（値上げ）定着による粗利益率の向上。",
+        "top10": {
+            "9983.T": "ファーストリテイリング", "3382.T": "セブン&アイHD", "8267.T": "イオン", "7532.T": "パン・パシフィックHD", "2681.T": "ゲオHD",
+            "WMT": "Walmart", "COST": "Costco", "PG": "Procter & Gamble", "KO": "Coca-Cola", "NKE": "Nike"
+        },
+        "event": "月次売上高の推移、インバウンド免税売上額、海外店舗（中国・欧米）の出店・伸び率"
     }
 }
 
+US_POPULAR_10 = {
+    "NVDA": "NVIDIA", "AAPL": "Apple", "MSFT": "Microsoft", "AMZN": "Amazon", "GOOGL": "Alphabet",
+    "META": "Meta Platforms", "TSLA": "Tesla", "AVGO": "Broadcom", "LLY": "Eli Lilly", "BRK-B": "Berkshire Hathaway"
+}
+
+# 全銘柄マップの作成
 ALL_TICKERS = {}
 for s, v in SECTOR_DATA.items():
-    ALL_TICKERS.update(v["top5"])
-    ALL_TICKERS.update(v["future5"])
+    ALL_TICKERS.update(v["top10"])
+ALL_TICKERS.update(US_POPULAR_10)
 
 def calculate_indicators(df):
     df['SMA5'] = df['Close'].rolling(window=5).mean()
@@ -70,12 +129,10 @@ def calculate_indicators(df):
     df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
     return df
 
-# データ取得の高速化（キャッシュ有効化で画面切り替え時のラグを解消）
 @st.cache_data(ttl=600)
 def fetch_data():
     return yf.download(list(ALL_TICKERS.keys()), period="1y", interval="1d", group_by="ticker", progress=False)
 
-# 企業ファンダメンタルズ（経営・期待値・財務）データの取得（高速化）
 @st.cache_data(ttl=3600)
 def fetch_info_data(ticker):
     try:
@@ -86,165 +143,188 @@ def fetch_info_data(ticker):
 
 data_dict = fetch_data()
 
-# --- セッション状態の初期化 ---
+# --- セッション状態管理 ---
+if "history" not in st.session_state:
+    st.session_state.history = ["📊 10大業界＆米国株トップ10"]
 if "target_ticker" not in st.session_state:
     st.session_state.target_ticker = "8035.T"
 if "nav_mode" not in st.session_state:
-    st.session_state.nav_mode = "📊 業界一覧（トップ5 vs 期待5）"
+    st.session_state.nav_mode = "📊 10大業界＆米国株トップ10"
 
-# 銘柄選択・遷移用コールバック（高速画面遷移）
-def go_to_detail(ticker):
-    st.session_state.target_ticker = ticker
-    st.session_state.nav_mode = "📈 個別銘柄詳細＆売買アドバイス"
+def navigate_to(mode, ticker=None):
+    if ticker:
+        st.session_state.target_ticker = ticker
+    st.session_state.history.append(mode)
+    st.session_state.nav_mode = mode
 
-# --- サイドバーナビゲーション ---
+def go_back():
+    if len(st.session_state.history) > 1:
+        st.session_state.history.pop()
+        st.session_state.nav_mode = st.session_state.history[-1]
+
+# --- 画面上部常駐ヘッダー（左上戻るボタン ＆ 検索バー） ---
+top_col1, top_col2 = st.columns([1, 4])
+
+with top_col1:
+    if len(st.session_state.history) > 1:
+        st.button("⬅️ 前の画面に戻る", on_click=go_back, type="secondary")
+
+with top_col2:
+    search_query = st.selectbox(
+        "🔍 銘柄コードまたは社名で検索（即座に個別分析画面へ移動）",
+        options=[""] + list(ALL_TICKERS.keys()),
+        format_func=lambda x: "🔎 銘柄を選択または入力してください..." if x == "" else f"{x.replace('.T', '')} - {ALL_TICKERS.get(x, '')}",
+        key="search_bar"
+    )
+    if search_query and search_query != st.session_state.target_ticker:
+        navigate_to("📈 個別銘柄詳細＆深掘り分析", ticker=search_query)
+
+st.title("📈 10大業界 株価・テクニカル・期待値分析 PRO+")
+
+# サイドバー設定
 mode = st.sidebar.radio(
-    "機能切り替え",
-    ["📊 業界一覧（トップ5 vs 期待5）", "📈 個別銘柄詳細＆売買アドバイス", "🚀 テンバガー（急騰）候補"],
+    "機能選択",
+    ["📊 10大業界＆米国株トップ10", "📈 個別銘柄詳細＆深掘り分析", "🚀 テンバガー（急騰）候補"],
     key="nav_mode"
 )
 
 # ==========================================
-# 📊 業界一覧（トップ5 vs 期待5）
+# 📊 10大業界＆米国株トップ10
 # ==========================================
-if mode == "📊 業界一覧（トップ5 vs 期待5）":
-    st.header("📊 業界別：トップ5社 vs 長期期待5社")
-    st.caption("💡 銘柄名や「📈 分析」ボタンを押すと、即座に個別分析画面に遷移します。")
+if mode == "📊 10大業界＆米国株トップ10":
+    st.header("📊 10大業界トップ10 ＆ 🇺🇸 米国株人気10選")
+    st.caption("銘柄カード上の「📈 分析」ボタンを押すと、即座に詳細分析ページに移動します。")
     
-    for sector_name, info in SECTOR_DATA.items():
-        st.subheader(f"🏢 {sector_name}")
-        st.info(f"💡 **注目イベント・変動要因**: {info['event']}")
+    tab_titles = ["🇺🇸 米国人気10選"] + list(SECTOR_DATA.keys())
+    tabs = st.tabs(tab_titles)
+    
+    # 1. 米国人気10選
+    with tabs[0]:
+        st.subheader("🇺🇸 米国株式市場：人気・主力10銘柄")
+        st.info("💡 **資金流入背景**: 世界のAIイノベーションを牽引する巨大IT・半導体企業（マグニフィセント7等）を中心とした世界的な資金集中。")
         
-        tab1, tab2 = st.tabs(["🏆 業界トップ5社", "🚀 長期的期待5社"])
-        
-        for tab, comp_dict in zip([tab1, tab2], [info["top5"], info["future5"]]):
-            with tab:
-                cols = st.columns(len(comp_dict))
-                for idx, (ticker, name) in enumerate(comp_dict.items()):
-                    try:
-                        df = data_dict[ticker].dropna()
-                        latest = df.iloc[-1]
-                        prev = df.iloc[-2]
-                        change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-                        is_us = not ticker.endswith(".T")
-                        unit = "$" if is_us else "¥"
-                        
-                        with cols[idx]:
-                            st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{ticker}", on_click=go_to_detail, args=(ticker,), type="primary")
-                            st.metric(
-                                label=f"{name}",
-                                value=f"{unit}{latest['Close']:,.1f}",
-                                delta=f"{change:+.2f}%"
-                            )
-                    except Exception:
-                        with cols[idx]:
-                            st.write(f"取得失敗: {name}")
+        cols = st.columns(5)
+        for idx, (ticker, name) in enumerate(US_POPULAR_10.items()):
+            try:
+                df = data_dict[ticker].dropna()
+                latest = df.iloc[-1]
+                prev = df.iloc[-2]
+                change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+                with cols[idx % 5]:
+                    st.button(f"📈 分析 ({ticker})", key=f"btn_us_{ticker}", on_click=navigate_to, args=("📈 個別銘柄詳細＆深掘り分析", ticker), type="primary")
+                    st.metric(label=f"{name}", value=f"${latest['Close']:,.1f}", delta=f"{change:+.2f}%")
+            except Exception:
+                with cols[idx % 5]: st.write(f"取得失敗: {name}")
+
+    # 2. 各10大業界タブ
+    for s_idx, (sector_name, info) in enumerate(SECTOR_DATA.items()):
+        with tabs[s_idx + 1]:
+            st.subheader(f"🏢 {sector_name}")
+            
+            c_bg, c_ev = st.columns([2, 2])
+            with c_bg:
+                st.success(f"🌊 **資金流入の背景分析**\n\n{info['bg']}")
+            with c_ev:
+                st.warning(f"⚡ **今後の注目イベント・触媒**\n\n{info['event']}")
+            
+            st.markdown("#### 🏆 業界トップ10銘柄")
+            cols = st.columns(5)
+            for idx, (ticker, name) in enumerate(info["top10"].items()):
+                try:
+                    df = data_dict[ticker].dropna()
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+                    unit = "$" if not ticker.endswith(".T") else "¥"
+                    
+                    with cols[idx % 5]:
+                        st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{sector_name}_{ticker}", on_click=navigate_to, args=("📈 個別銘柄詳細＆深掘り分析", ticker), type="primary")
+                        st.metric(label=f"{name}", value=f"{unit}{latest['Close']:,.1f}", delta=f"{change:+.2f}%")
+                except Exception:
+                    with cols[idx % 5]: st.write(f"取得失敗: {name}")
 
 # ==========================================
-# 📈 個別銘柄詳細＆売買アドバイス
+# 📈 個別銘柄詳細＆深掘り分析
 # ==========================================
-elif mode == "📈 個別銘柄詳細＆売買アドバイス":
-    st.header("📈 個別銘柄テクニカル＆株価要因分析")
-    
-    selected_ticker = st.selectbox(
-        "銘柄を選択してください",
-        options=list(ALL_TICKERS.keys()),
-        index=list(ALL_TICKERS.keys()).index(st.session_state.target_ticker) if st.session_state.target_ticker in ALL_TICKERS else 0,
-        format_func=lambda x: f"{x.replace('.T', '')} - {ALL_TICKERS.get(x, '')}"
-    )
-    st.session_state.target_ticker = selected_ticker
-    
-    df = data_dict[selected_ticker].dropna()
-    df = calculate_indicators(df)
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-    
+elif mode == "📈 個別銘柄詳細＆深掘り分析":
+    selected_ticker = st.session_state.target_ticker
     comp_name = ALL_TICKERS.get(selected_ticker, "")
     is_us = not selected_ticker.endswith(".T")
     unit = "$" if is_us else "¥"
     
     st.markdown(f"## **{comp_name} ({selected_ticker})**")
     
-    # --- 当日の詳細株価 ---
-    st.markdown("### 💵 当日（最新）の株価詳細")
+    df = data_dict[selected_ticker].dropna()
+    df = calculate_indicators(df)
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("現在値 (終値)", f"{unit}{latest['Close']:,.1f}", f"{((latest['Close']-prev['Close'])/prev['Close'])*100:+.2f}%")
-    m2.metric("始値 (Open)", f"{unit}{latest['Open']:,.1f}")
-    m3.metric("高値 (High)", f"{unit}{latest['High']:,.1f}")
-    m4.metric("安値 (Low)", f"{unit}{latest['Low']:,.1f}")
+    m2.metric("始値", f"{unit}{latest['Open']:,.1f}")
+    m3.metric("高値", f"{unit}{latest['High']:,.1f}")
+    m4.metric("安値", f"{unit}{latest['Low']:,.1f}")
     m5.metric("前日終値", f"{unit}{prev['Close']:,.1f}")
     
-    # --- 株価影響要因の具体分析（経営・期待値・財務） ---
-    st.markdown("### 🔍 株価への具体的影響要因（ファンダメンタルズ分析）")
+    st.markdown("---")
+    st.markdown("### 🔍 株価・業績期待値の深掘り評価")
     info = fetch_info_data(selected_ticker)
     
     f1, f2, f3 = st.columns(3)
     
     with f1:
-        st.subheader("🏢 経営面（本業・収益性）")
+        st.subheader("🏢 本業の収益力")
         profit_margin = info.get("profitMargins", None)
         roe = info.get("returnOnEquity", None)
-        rev_growth = info.get("revenueGrowth", None)
         
         reasons_m = []
-        if profit_margin is not None and profit_margin > 0.15:
-            reasons_m.append(f"✅ **高収益体質**: 利益率 {profit_margin*100:.1f}% と高く本業の競争力が強力。")
-        elif profit_margin is not None and profit_margin < 0.03:
-            reasons_m.append(f"⚠️ **収益力低下**: 利益率 {profit_margin*100:.1f}% と低調。コスト高・需要減の影響懸念。")
-            
-        if rev_growth is not None and rev_growth > 0.1:
-            reasons_m.append(f"🚀 **売上高拡大**: 前年比 +{rev_growth*100:.1f}% 成長。事業拡大が株価を下支え。")
-        elif rev_growth is not None and rev_growth < 0:
-            reasons_m.append(f"🔻 **減収懸念**: 前年比 {rev_growth*100:.1f}% 減減。業績悪化が売り圧力に。")
-            
+        if profit_margin is not None:
+            if profit_margin > 0.15:
+                reasons_m.append(f"🟢 **高い純利益率 ({profit_margin*100:.1f}%)**: 価格転嫁力・ブランド力が高く、本業で圧倒的な稼ぐ力を保持。")
+            elif profit_margin < 0.04:
+                reasons_m.append(f"🔴 **利益率の上値重さ ({profit_margin*100:.1f}%)**: 原材料費や人件費の高騰が利益圧迫要因。")
+        if roe is not None:
+            if roe > 0.12:
+                reasons_m.append(f"🟢 **高ROE ({roe*100:.1f}%)**: 株主資本を効率的に活用して収益を生み出す経営効率。")
         if not reasons_m:
-            reasons_m.append("本業の収益性・売上高成長率は概ね標準水準で推移中。")
-            
+            reasons_m.append("本業の収益構造および資本効率は標準的。")
         st.write("\n\n".join(reasons_m))
 
     with f2:
-        st.subheader("🎯 期待値（市場評価・PER/PBR）")
+        st.subheader("🎯 期待値・バリュエーション")
         per = info.get("trailingPE", None)
         pbr = info.get("priceToBook", None)
         
         reasons_e = []
         if per is not None:
             if per > 35:
-                reasons_e.append(f"🔥 **高期待/プレミアム重視 (PER {per:.1f}倍)**: 今後の急成長が織り込まれており、決算等での落差リスクに注意。")
+                reasons_e.append(f"🔥 **高成長期待織り込み (PER {per:.1f}倍)**: テーマ性への評価が高い反面、決算未達時の反応に注意。")
             elif per < 12:
-                reasons_e.append(f"💡 **割安放置/見直し期待 (PER {per:.1f}倍)**: 市場の関心が薄いが、評価見直しで上昇余地あり。")
-            else:
-                reasons_e.append(f"📊 **適正な市場評価 (PER {per:.1f}倍)**: 過度な買われすぎ・売られすぎ感のない妥当水準。")
-                
+                reasons_e.append(f"💡 **割安放置/見直し期待 (PER {per:.1f}倍)**: 利益水準に対して評価が低く、買い直し余地あり。")
         if pbr is not None and pbr < 1.0:
-            reasons_e.append(f"📢 **PBR1倍割れ ({pbr:.2f}倍)**: 東証の改善要請に伴い、株主還元・自社株買い期待の買い要因。")
-            
+            reasons_e.append(f"📢 **PBR1倍割れ ({pbr:.2f}倍)**: 東証の株価意識要請に伴う自社株買い・増配期待が強い下値支持。")
         if not reasons_e:
-            reasons_e.append("市場からの評価水準はニュートラルで大きな偏りは見られません。")
-            
+            reasons_e.append("指標面の市場評価はバリュエーション的に中立水準。")
         st.write("\n\n".join(reasons_e))
 
     with f3:
-        st.subheader("🛡️ 財務面（安全性・還元力）")
-        debt_to_eq = info.get("debtToEquity", None)
+        st.subheader("🛡️ 財務・株主還元")
+        debt_eq = info.get("debtToEquity", None)
         div_yield = info.get("dividendYield", None)
         
         reasons_f = []
-        if debt_to_eq is not None:
-            if debt_to_eq < 50:
-                reasons_f.append(f"🏰 **財務健全**: 負債比率が低く金利上昇局面でも堅牢なリスク耐性。")
-            elif debt_to_eq > 200:
-                reasons_f.append(f"⚠️ **有利子負債多重**: 金利上昇が財務負担・経営圧迫につながる懸念あり。")
-                
+        if debt_eq is not None:
+            if debt_eq < 50:
+                reasons_f.append(f"🏰 **健全な財務構造**: 負債比率が低く、金利上昇局面でも揺らがない安定感。")
+            elif debt_eq > 200:
+                reasons_f.append(f"⚠️ **有利子負債多め**: 金利コスト増加が懸念材料。")
         if div_yield is not None and div_yield > 0.03:
-            reasons_f.append(f"💰 **高配当インカム魅力 ({div_yield*100:.2f}%)**: 配当利回りが高く、下値を支える強い要素。")
-            
+            reasons_f.append(f"💰 **高配当インカム魅力 ({div_yield*100:.2f}%)**: 投資家の買いを呼び込む強力な下値の支え。")
         if not reasons_f:
-            reasons_f.append("財務リスクは低く、事業継続性に特段の不安要素なし。")
-            
+            reasons_f.append("財務リスク・配当水準ともにバランスのとれた推移。")
         st.write("\n\n".join(reasons_f))
 
-    # --- チャート表示 ---
+    # チャート表示
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ローソク足'), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['SMA5'], name='5日線(短期)', line=dict(color='orange', width=1)), row=1, col=1)
@@ -268,52 +348,12 @@ elif mode == "📈 個別銘柄詳細＆売買アドバイス":
     fig.update_layout(height=650, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 短期・中期・長期 売買アドバイス ---
-    st.markdown("### 🎯 期間別テクニカル判定＆買いアドバイス")
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.subheader("⏱️ 短期（数日〜1週間）")
-        if latest['Pinbar'] or latest['RSI'] < 30:
-            st.success("🟢 **買い推奨（押し目買い/反発狙い）**")
-            st.caption("**理由**: 下ひげピンバー検出、またはRSI30以下で短期的売られすぎ。リバウンド狙いの買い好機。")
-        elif latest['Close'] > latest['SMA5']:
-            st.info("🟡 **様子見 / 押し目待ち**")
-            st.caption("**理由**: 短期5日線の上で上昇トレンド中だが、やや買われすぎ領域に接近。")
-        else:
-            st.error("🔴 **静観 / 売り検討**")
-            st.caption("**理由**: 5日線を下回り短期弱気モード。")
-
-    with c2:
-        st.subheader("📅 中期（数週間〜数ヶ月）")
-        if latest['SMA5'] > latest['SMA25'] and prev['SMA5'] <= prev['SMA25']:
-            st.success("🟢 **強力買い（ゴールデンクロス発生）**")
-            st.caption("**理由**: 5日移動平均線が25日線を明確に上抜け。トレンド転換の買いサイン。")
-        elif latest['Close'] > latest['SMA25']:
-            st.success("🟢 **継続保有 / 買い**")
-            st.caption("**理由**: 25日移動平均線の上で推移しており中期上昇トレンドを維持。")
-        else:
-            st.error("🔴 **静観（トレンド悪化）**")
-            st.caption("**理由**: 25日線を割り込んでおり、中期的な調整リスクあり。")
-
-    with c3:
-        st.subheader("🏛️ 長期（半年〜数年）")
-        if latest['SMA5'] > latest['SMA25'] > latest['SMA75']:
-            st.success("🟢 **買い推奨（パーフェクトオーダー）**")
-            st.caption("**理由**: 5日>25日>75日の完全上昇配列。長期成長ストーリーに乗る買い場。")
-        elif latest['Close'] > latest['SMA75']:
-            st.info("🟡 **押し目買い検討**")
-            st.caption("**理由**: 75日線が下支え（サポート）として機能中。")
-        else:
-            st.error("🔴 **見送り**")
-            st.caption("**理由**: 長期トレンドが下降傾向。買いは慎重に。")
-
 # ==========================================
 # 🚀 テンバガー（急騰）候補
 # ==========================================
 elif mode == "🚀 テンバガー（急騰）候補":
     st.header("🚀 テンバガー（急騰）候補スクリーニング")
-    st.caption("一番左の「📈 分析」ボタンを押すことで、即座に対象銘柄の個別分析画面に移動できます。")
+    st.caption("テクニカル指標の条件に合致した注目銘柄一覧です。「📈 分析画面へ」ボタンで即座に個別分析に移行できます。")
     
     results = []
     for ticker, name in ALL_TICKERS.items():
@@ -332,17 +372,14 @@ elif mode == "🚀 テンバガー（急騰）候補":
                 score += 30
                 reasons.append(f"出来高急増({latest['Vol_Ratio']:.1f}倍)")
                 actions.append("大口資金流入。打診買い検討")
-                
             if latest['Pinbar']:
                 score += 25
                 reasons.append("下ひげ(底打ち)")
                 actions.append("反発サイン。指値買い準備")
-                
             if prev['SMA5'] <= prev['SMA25'] and latest['SMA5'] > latest['SMA25']:
                 score += 25
                 reasons.append("5日線×25日線 GC")
                 actions.append("上昇開始。順張り追加")
-                
             if prev['RSI'] < 35 and latest['RSI'] > prev['RSI']:
                 score += 20
                 reasons.append(f"RSI反発({latest['RSI']:.1f}%)")
@@ -365,14 +402,11 @@ elif mode == "🚀 テンバガー（急騰）候補":
         results = sorted(results, key=lambda x: x['score'], reverse=True)
         st.write(f"**該当件数: 全 {len(results)} 件**")
         
-        # 最左列に「分析」ボタンを配置したカードレイアウト
         for res in results:
             with st.container():
                 col_btn, col_code, col_price, col_sig, col_act = st.columns([1.8, 2, 2, 3, 3])
-                
                 with col_btn:
-                    st.button(f"📈 分析画面へ", key=f"btn_tb_{res['ticker']}", on_click=go_to_detail, args=(res['ticker'],), type="primary")
-                    
+                    st.button(f"📈 分析画面へ", key=f"btn_tb_{res['ticker']}", on_click=navigate_to, args=("📈 個別銘柄詳細＆深掘り分析", res['ticker']), type="primary")
                 col_code.markdown(f"**{res['code']}**\n\n{res['name']}")
                 col_price.markdown(f"**株価**: {res['price']}\n\n**スコア**: {res['score']}")
                 col_sig.markdown(f"**検出シグナル**:\n\n{res['reasons']}")
