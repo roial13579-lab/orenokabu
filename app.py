@@ -107,6 +107,9 @@ for s, v in SECTOR_DATA.items():
 ALL_TICKERS.update(US_POPULAR_10)
 
 def calculate_indicators(df):
+    """テクニカル指標の計算（MultiIndexや欠損に安全に対応）"""
+    df = df.copy()
+    
     df['SMA5'] = df['Close'].rolling(window=5).mean()
     df['SMA25'] = df['Close'].rolling(window=25).mean()
     df['SMA75'] = df['Close'].rolling(window=75).mean()
@@ -124,13 +127,25 @@ def calculate_indicators(df):
     body = abs(df['Close'] - df['Open'])
     lower_shadow = np.minimum(df['Open'], df['Close']) - df['Low']
     df['Pinbar'] = lower_shadow >= (2 * body)
-    df['Vol_Ratio'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
+    
+    vol_sma20 = df['Volume'].rolling(window=20).mean()
+    df['Vol_Ratio'] = np.where(vol_sma20 > 0, df['Volume'] / vol_sma20, 0)
     return df
 
 @st.cache_data(ttl=600)
 def fetch_data():
     all_symbols = list(ALL_TICKERS.keys()) + ["^N225", "JPY=X"]
     return yf.download(all_symbols, period="1y", interval="1d", group_by="ticker", progress=False)
+
+def get_ticker_df(raw_data, ticker):
+    """MultiIndex構造から安全に特定銘柄のデータフレームを抽出する関数"""
+    try:
+        if ticker in raw_data.columns.levels[0]:
+            df = raw_data[ticker].copy().dropna(subset=['Close'])
+            return df
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def fetch_info_data(ticker):
@@ -165,13 +180,10 @@ sector_movement = {}
 for s_name, s_data in SECTOR_DATA.items():
     diffs = []
     for t_code in s_data["top10"].keys():
-        try:
-            df = data_dict[t_code].dropna()
-            if len(df) >= 2:
-                diff = abs(df['Close'].iloc[-1] - df['Close'].iloc[-2])
-                diffs.append(diff)
-        except Exception:
-            continue
+        df = get_ticker_df(data_dict, t_code)
+        if len(df) >= 2:
+            diff = abs(df['Close'].iloc[-1] - df['Close'].iloc[-2])
+            diffs.append(diff)
     sector_movement[s_name] = np.mean(diffs) if diffs else 0
 
 # 金額変動の大きい順に業界をソート
@@ -187,25 +199,25 @@ if mode == "📊 10大業界＆米国株トップ10":
     col_m1, col_m2, col_m3 = st.columns(3)
     
     with col_m1:
-        try:
-            nk_df = data_dict["^N225"].dropna()
+        nk_df = get_ticker_df(data_dict, "^N225")
+        if len(nk_df) >= 2:
             latest = nk_df['Close'].iloc[-1]
             prev = nk_df['Close'].iloc[-2]
             diff = latest - prev
             pct = (diff / prev) * 100
             st.metric("日経平均株価", f"{latest:,.2f} 円", f"{diff:+,.2f} 円 ({pct:+.2f}%)")
-        except Exception:
+        else:
             st.metric("日経平均株価", "データ取得中...", "-")
             
     with col_m2:
-        try:
-            fx_df = data_dict["JPY=X"].dropna()
+        fx_df = get_ticker_df(data_dict, "JPY=X")
+        if len(fx_df) >= 2:
             latest = fx_df['Close'].iloc[-1]
             prev = fx_df['Close'].iloc[-2]
             diff = latest - prev
             pct = (diff / prev) * 100
             st.metric("米ドル / 円", f"{latest:.2f} 円", f"{diff:+.2f} 円 ({pct:+.2f}%)")
-        except Exception:
+        else:
             st.metric("米ドル / 円", "データ取得中...", "-")
             
     with col_m3:
@@ -223,16 +235,16 @@ if mode == "📊 10大業界＆米国株トップ10":
         
         cols = st.columns(5)
         for idx, (ticker, name) in enumerate(US_POPULAR_10.items()):
-            try:
-                df = data_dict[ticker].dropna()
-                latest = df.iloc[-1]
-                prev = df.iloc[-2]
-                change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-                with cols[idx % 5]:
+            df = get_ticker_df(data_dict, ticker)
+            with cols[idx % 5]:
+                if len(df) >= 2:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2]
+                    change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
                     st.button(f"📈 分析 ({ticker})", key=f"btn_us_{ticker}", on_click=select_ticker, args=(ticker,), type="primary")
                     st.metric(label=f"{name}", value=f"${latest['Close']:,.1f}", delta=f"{change:+.2f}%")
-            except Exception:
-                with cols[idx % 5]: st.write(f"取得失敗: {name}")
+                else:
+                    st.write(f"取得失敗: {name}")
 
     # 2. 変動額順 10大業界タブ
     for s_idx, sector_name in enumerate(sorted_sectors):
@@ -249,18 +261,17 @@ if mode == "📊 10大業界＆米国株トップ10":
             st.markdown("#### 🏆 業界トップ10銘柄")
             cols = st.columns(5)
             for idx, (ticker, name) in enumerate(info["top10"].items()):
-                try:
-                    df = data_dict[ticker].dropna()
-                    latest = df.iloc[-1]
-                    prev = df.iloc[-2]
-                    change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
-                    unit = "$" if not ticker.endswith(".T") else "¥"
-                    
-                    with cols[idx % 5]:
+                df = get_ticker_df(data_dict, ticker)
+                unit = "$" if not ticker.endswith(".T") else "¥"
+                with cols[idx % 5]:
+                    if len(df) >= 2:
+                        latest = df.iloc[-1]
+                        prev = df.iloc[-2]
+                        change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
                         st.button(f"📈 分析 ({ticker.replace('.T','')})", key=f"btn_sec_{sector_name}_{ticker}", on_click=select_ticker, args=(ticker,), type="primary")
                         st.metric(label=f"{name}", value=f"{unit}{latest['Close']:,.1f}", delta=f"{change:+.2f}%")
-                except Exception:
-                    with cols[idx % 5]: st.write(f"取得失敗: {name}")
+                    else:
+                        st.write(f"取得失敗: {name}")
 
 # ==========================================
 # 📈 個別銘柄詳細＆深掘り分析
@@ -299,70 +310,73 @@ elif mode == "📈 個別銘柄詳細＆深掘り分析":
         
         st.markdown(f"## **{comp_name} ({selected_ticker})**")
         
-        df = data_dict[selected_ticker].dropna()
-        df = calculate_indicators(df)
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
-        
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("現在値 (終値)", f"{unit}{latest['Close']:,.1f}", f"{((latest['Close']-prev['Close'])/prev['Close'])*100:+.2f}%")
-        m2.metric("始値", f"{unit}{latest['Open']:,.1f}")
-        m3.metric("高値", f"{unit}{latest['High']:,.1f}")
-        m4.metric("安値", f"{unit}{latest['Low']:,.1f}")
-        m5.metric("前日終値", f"{unit}{prev['Close']:,.1f}")
-        
-        st.markdown("---")
-        st.markdown("### 🔍 株価・業績期待値の深掘り評価")
-        info = fetch_info_data(selected_ticker)
-        
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            st.subheader("🏢 本業の収益力")
-            profit_margin = info.get("profitMargins", None)
-            roe = info.get("returnOnEquity", None)
-            reasons_m = []
-            if profit_margin is not None:
-                if profit_margin > 0.15: reasons_m.append(f"🟢 **高利益率 ({profit_margin*100:.1f}%)**: 価格転嫁力が強い。")
-                elif profit_margin < 0.04: reasons_m.append(f"🔴 **低利益率 ({profit_margin*100:.1f}%)**: コスト圧迫。")
-            if roe is not None and roe > 0.12: reasons_m.append(f"🟢 **高ROE ({roe*100:.1f}%)**: 効率経営。")
-            st.write("\n\n".join(reasons_m) if reasons_m else "標準的な収益構造です。")
+        df = get_ticker_df(data_dict, selected_ticker)
+        if len(df) >= 2:
+            df = calculate_indicators(df)
+            latest = df.iloc[-1]
+            prev = df.iloc[-2]
+            
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("現在値 (終値)", f"{unit}{latest['Close']:,.1f}", f"{((latest['Close']-prev['Close'])/prev['Close'])*100:+.2f}%")
+            m2.metric("始値", f"{unit}{latest['Open']:,.1f}")
+            m3.metric("高値", f"{unit}{latest['High']:,.1f}")
+            m4.metric("安値", f"{unit}{latest['Low']:,.1f}")
+            m5.metric("前日終値", f"{unit}{prev['Close']:,.1f}")
+            
+            st.markdown("---")
+            st.markdown("### 🔍 株価・業績期待値の深掘り評価")
+            info = fetch_info_data(selected_ticker)
+            
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                st.subheader("🏢 本業の収益力")
+                profit_margin = info.get("profitMargins", None)
+                roe = info.get("returnOnEquity", None)
+                reasons_m = []
+                if profit_margin is not None:
+                    if profit_margin > 0.15: reasons_m.append(f"🟢 **高利益率 ({profit_margin*100:.1f}%)**: 価格転嫁力が強い。")
+                    elif profit_margin < 0.04: reasons_m.append(f"🔴 **低利益率 ({profit_margin*100:.1f}%)**: コスト圧迫。")
+                if roe is not None and roe > 0.12: reasons_m.append(f"🟢 **高ROE ({roe*100:.1f}%)**: 効率経営。")
+                st.write("\n\n".join(reasons_m) if reasons_m else "標準的な収益構造です。")
 
-        with f2:
-            st.subheader("🎯 期待値・バリュエーション")
-            per = info.get("trailingPE", None)
-            pbr = info.get("priceToBook", None)
-            reasons_e = []
-            if per is not None:
-                if per > 35: reasons_e.append(f"🔥 **高成長織り込み (PER {per:.1f}倍)**")
-                elif per < 12: reasons_e.append(f"💡 **割安放置 (PER {per:.1f}倍)**")
-            if pbr is not None and pbr < 1.0: reasons_e.append(f"📢 **PBR1倍割れ ({pbr:.2f}倍)**: 株主還元期待。")
-            st.write("\n\n".join(reasons_e) if reasons_e else "中立的な評価水準です。")
+            with f2:
+                st.subheader("🎯 期待値・バリュエーション")
+                per = info.get("trailingPE", None)
+                pbr = info.get("priceToBook", None)
+                reasons_e = []
+                if per is not None:
+                    if per > 35: reasons_e.append(f"🔥 **高成長織り込み (PER {per:.1f}倍)**")
+                    elif per < 12: reasons_e.append(f"💡 **割安放置 (PER {per:.1f}倍)**")
+                if pbr is not None and pbr < 1.0: reasons_e.append(f"📢 **PBR1倍割れ ({pbr:.2f}倍)**: 株主還元期待。")
+                st.write("\n\n".join(reasons_e) if reasons_e else "中立的な評価水準です。")
 
-        with f3:
-            st.subheader("🛡️ 財務・株主還元")
-            debt_eq = info.get("debtToEquity", None)
-            div_yield = info.get("dividendYield", None)
-            reasons_f = []
-            if debt_eq is not None and debt_eq < 50: reasons_f.append("🏰 **健全な財務構造**")
-            if div_yield is not None and div_yield > 0.03: reasons_f.append(f"💰 **高配当魅力 ({div_yield*100:.2f}%)**")
-            st.write("\n\n".join(reasons_f) if reasons_f else "バランスのとれた財務状態です。")
+            with f3:
+                st.subheader("🛡️ 財務・株主還元")
+                debt_eq = info.get("debtToEquity", None)
+                div_yield = info.get("dividendYield", None)
+                reasons_f = []
+                if debt_eq is not None and debt_eq < 50: reasons_f.append("🏰 **健全な財務構造**")
+                if div_yield is not None and div_yield > 0.03: reasons_f.append(f"💰 **高配当魅力 ({div_yield*100:.2f}%)**")
+                st.write("\n\n".join(reasons_f) if reasons_f else "バランスのとれた財務状態です。")
 
-        # チャート表示
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
-        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ローソク足'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA5'], name='5日線', line=dict(color='orange', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA25'], name='25日線', line=dict(color='blue', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA75'], name='75日線', line=dict(color='purple', width=1)), row=1, col=1)
-        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='出来高', marker_color='cadetblue'), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='green')), row=3, col=1)
-        
-        fig.update_xaxes(rangeselector=dict(buttons=list([
-            dict(count=1, label="1ヶ月", step="month", stepmode="backward"),
-            dict(count=3, label="3ヶ月", step="month", stepmode="backward"),
-            dict(step="all", label="全期間")
-        ])), rangeslider=dict(visible=True), type="date")
-        fig.update_layout(height=650, template="plotly_white")
-        st.plotly_chart(fig, use_container_width=True)
+            # チャート表示
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.6, 0.2, 0.2])
+            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='ローソク足'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA5'], name='5日線', line=dict(color='orange', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA25'], name='25日線', line=dict(color='blue', width=1)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA75'], name='75日線', line=dict(color='purple', width=1)), row=1, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='出来高', marker_color='cadetblue'), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI', line=dict(color='green')), row=3, col=1)
+            
+            fig.update_xaxes(rangeselector=dict(buttons=list([
+                dict(count=1, label="1ヶ月", step="month", stepmode="backward"),
+                dict(count=3, label="3ヶ月", step="month", stepmode="backward"),
+                dict(step="all", label="全期間")
+            ])), rangeslider=dict(visible=True), type="date")
+            fig.update_layout(height=650, template="plotly_white")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.error("データの取得に失敗したか、十分なデータがありません。")
 
     else:
         # 未選択時のトップ画面（全10業界トップ10一覧）
@@ -388,7 +402,7 @@ elif mode == "🚀 テンバガー（急騰）候補":
     results = []
     for ticker, name in ALL_TICKERS.items():
         try:
-            df = data_dict[ticker].dropna()
+            df = get_ticker_df(data_dict, ticker)
             if len(df) < 75: continue
             df = calculate_indicators(df)
             latest = df.iloc[-1]
