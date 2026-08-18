@@ -116,21 +116,26 @@ def reset_to_top():
     st.session_state["selected_stock"] = None
 
 # 5. 上部操作エリア（「トップに戻る」ボタン & 検索バー）
-col_back, col_space = st.columns([2, 5])
+col_back, col_space = st.columns([3, 4])
 with col_back:
-    # 銘柄選択時のみ、または常に表示してクリックで確実に戻る処理
-    if st.button("⬅️ 個別銘柄トップ（10大業界一覧）に戻る", key="btn_global_return"):
-        reset_to_top()
-        st.rerun()
+    # on_click で関数を呼び出すことで確実にトップへ戻る動作を実行
+    st.button(
+        "⬅️ 個別銘柄トップ（10大業界一覧）に戻る",
+        key="btn_global_return",
+        on_click=reset_to_top
+    )
 
 st.markdown('<div class="search-box-label">🔍 銘柄コードまたは社名で検索・選択してください</div>', unsafe_allow_html=True)
+
+# ドロップダウン初期値の計算
+current_index = 0
+if st.session_state["selected_stock"] in ALL_STOCKS_LIST:
+    current_index = ALL_STOCKS_LIST.index(st.session_state["selected_stock"]) + 1
+
 selected_from_dropdown = st.selectbox(
     "検索・選択",
     options=["タップして銘柄を選択または入力..."] + ALL_STOCKS_LIST,
-    index=0 if st.session_state["selected_stock"] is None else (
-        ALL_STOCKS_LIST.index(st.session_state["selected_stock"]) + 1 
-        if st.session_state["selected_stock"] in ALL_STOCKS_LIST else 0
-    ),
+    index=current_index,
     label_visibility="collapsed"
 )
 
@@ -173,7 +178,7 @@ if st.session_state["selected_stock"] is None:
     with tab_tenbagger:
         st.subheader("🚀 テンバガー（10倍株）候補・注目高成長株")
         st.write("小型成長株や急拡大セクターの分析一覧を表示します。")
-        # テンバガー対象銘柄の表示（例）
+        
         tb_cols = st.columns(4)
         tenbagger_list = ["三井E&S", "石川製作所", "豊和工業", "レーザーテック"]
         for idx, stock in enumerate(tenbagger_list):
