@@ -1,84 +1,58 @@
 import streamlit as st
 
-# ページ基本設定
+# 1. ページ基本設定
 st.set_page_config(
-    page_title="個別銘柄 検索 & 深掘り",
+    page_title="個別銘柄検索 & 深掘り",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# -------------------------------------------------------------------
-# 1. カスタムCSS（視認性の向上 & デザインの最適化）
-# -------------------------------------------------------------------
+# 2. カスタムCSS（赤色の強い圧迫感を抑え、元のレイアウトを保つ）
 st.markdown("""
 <style>
     /* 全体背景 */
-    .stApp {
-        background-color: #f8fafc;
+    .main {
+        background-color: #fafafa;
     }
 
-    /* 上部ヘッダーの固定 */
-    .sticky-header {
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        background-color: #ffffff;
-        padding: 12px 0px;
-        border-bottom: 1px solid #e2e8f0;
-        margin-bottom: 20px;
-    }
-
-    /* 銘柄分析ボタンのスタイル変更（赤色からの脱却・カード風デザイン） */
+    /* 銘柄分析ボタンのスタイル（赤背景を解消し、見やすいカード風に変更） */
     div.stButton > button {
-        width: 100% !important;
         background-color: #ffffff !important;
-        color: #1e293b !important;
-        border: 1px solid #cbd5e1 !important;
-        border-radius: 8px !important;
-        padding: 10px 14px !important;
-        font-size: 14px !important;
-        font-weight: 600 !important;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
-        transition: all 0.2s ease-in-out !important;
+        color: #333333 !important;
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 6px !important;
+        font-size: 13px !important;
+        padding: 6px 10px !important;
+        margin-bottom: 4px !important;
+        box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.05) !important;
+        width: 100% !important;
         text-align: left !important;
     }
 
-    /* ボタンホバー時 */
+    /* ボタンホバー（カーソルをのせた時）のスタイル */
     div.stButton > button:hover {
-        background-color: #eff6ff !important;
-        border-color: #3b82f6 !important;
-        color: #1d4ed8 !important;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+        background-color: #f0f7ff !important;
+        border-color: #0066cc !important;
+        color: #0066cc !important;
     }
 
-    /* 戻るボタン専用スタイル */
-    .back-btn > button {
-        background-color: #f1f5f9 !important;
-        border: 1px solid #94a3b8 !important;
-        color: #334155 !important;
-    }
-    .back-btn > button:hover {
-        background-color: #e2e8f0 !important;
-        border-color: #64748b !important;
+    /* トップへ戻るボタンの強調表示 */
+    div[data-testid="stColumn"] > div > div > div > button {
+        border-color: #cccccc !important;
     }
 
-    /* カテゴリ見出しの装飾 */
-    .category-title {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #334155;
-        border-left: 4px solid #3b82f6;
-        padding-left: 10px;
-        margin-top: 20px;
-        margin-bottom: 15px;
+    /* カテゴリタイトルの余白調整 */
+    .category-header {
+        font-size: 18px;
+        font-weight: bold;
+        color: #222222;
+        margin-top: 15px;
+        margin-bottom: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------------------------------------------
-# 2. 銘柄データ定義
-# -------------------------------------------------------------------
+# 3. 業界＆銘柄データ構造（画像上の銘柄順）
 STOCK_DATA = {
     "半導体": [
         "東京エレクトロン", "アドバンテスト", "ディスコ", "レーザーテック", "NVIDIA",
@@ -97,89 +71,71 @@ STOCK_DATA = {
     ]
 }
 
-# フラットなリスト（検索用）
+# 全銘柄リスト（検索ドロップダウン用）
 ALL_STOCKS = [stock for category in STOCK_DATA.values() for stock in category]
 
-# -------------------------------------------------------------------
-# 3. セッション状態（State）の初期化
-# -------------------------------------------------------------------
+# 4. セッション状態（State）の初期化
 if "selected_stock" not in st.session_state:
     st.session_state["selected_stock"] = None
 
-def select_stock(stock_name):
-    st.session_state["selected_stock"] = stock_name
+# 5. アプリヘッダー部分
+st.write("🔍 **個別銘柄 検索 & 深掘り**")
 
-def reset_to_top():
-    st.session_state["selected_stock"] = None
-
-# -------------------------------------------------------------------
-# 4. 固定上部ナビゲーションエリア
-# -------------------------------------------------------------------
-st.markdown('<div class="sticky-header">', unsafe_allow_html=True)
-
-col_back, col_search = st.columns([1, 3])
-
+# 「トップに戻る」ボタンエリア
+col_back, col_empty = st.columns([2, 5])
 with col_back:
-    # 選択されている時のみ「戻る」ボタンを有効化/目立たせる
-    if st.session_state["selected_stock"] is not None:
-        st.button("⬅️ 個別銘柄トップ（10大業界一覧）に戻る", on_click=reset_to_top, key="back_btn")
-    else:
-        st.write("📊 **全10業界 & 米国株トップ一覧**")
-
-with col_search:
-    # ドロップダウン検索
-    selected_from_search = st.selectbox(
-        "🔍 銘柄コードまたは社名で検索・選択してください",
-        options=[""] + ALL_STOCKS,
-        index=0 if st.session_state["selected_stock"] is None else (
-            ALL_STOCKS.index(st.session_state["selected_stock"]) + 1 
-            if st.session_state["selected_stock"] in ALL_STOCKS else 0
-        ),
-        label_visibility="collapsed"
-    )
-    if selected_from_search and selected_from_search != st.session_state["selected_stock"]:
-        st.session_state["selected_stock"] = selected_from_search
+    if st.button("⬅️ 個別銘柄トップ（10大業界一覧）に戻る", key="btn_return_top"):
+        st.session_state["selected_stock"] = None
         st.rerun()
 
-st.markdown('</div>', unsafe_allow_html=True)
+# 銘柄検索バー
+st.write("🔍 銘柄コードまたは社名で検索・選択してください")
+search_selection = st.selectbox(
+    "銘柄選択",
+    options=["タップして銘柄を選択または入力..."] + ALL_STOCKS,
+    index=0 if st.session_state["selected_stock"] is None else (
+        ALL_STOCKS.index(st.session_state["selected_stock"]) + 1 
+        if st.session_state["selected_stock"] in ALL_STOCKS else 0
+    ),
+    label_visibility="collapsed"
+)
 
-# -------------------------------------------------------------------
-# 5. メイン表示エリアの分岐
-# -------------------------------------------------------------------
+# 検索バーで銘柄が選ばれた場合の処理
+if search_selection != "タップして銘柄を選択または入力..." and search_selection != st.session_state["selected_stock"]:
+    st.session_state["selected_stock"] = search_selection
+    st.rerun()
+
+st.write("---")
+
+# 6. メイン表示切り替え（トップ一覧 ⇄ 個別分析画面）
 if st.session_state["selected_stock"] is None:
-    # --- 【画面A】トップ一覧画面 ---
-    st.subheader("🏆 全10業界 & 米国株トップ一覧")
-    st.caption("気になる銘柄のボタンを押すと詳細チャート・分析を表示します。")
+    # -------------------------------------------------------------
+    # 【画面1】トップ一覧画面（赤色を廃止した5列レイアウト）
+    # -------------------------------------------------------------
+    st.title("🏆 全10業界 & 米国株トップ10一覧")
+    st.caption("上記の検索バーに検索・入力するか、気になる銘柄の「📝 分析」ボタンを押すと詳細チャートを表示します。")
 
-    for category, stocks in STOCK_DATA.items():
-        st.markdown(f'<div class="category-title">🏢 {category}</div>', unsafe_allow_html=True)
-
-        # 5列に並べて配置
+    for category_name, stocks in STOCK_DATA.items():
+        st.markdown(f'<div class="category-header">🏢 {category_name}</div>', unsafe_allow_html=True)
+        
+        # 横5列に配置
         cols = st.columns(5)
-        for idx, stock in enumerate(stocks):
-            with cols[idx % 5]:
-                st.button(
-                    f"📝 {stock}",
-                    key=f"btn_{category}_{stock}",
-                    on_click=select_stock,
-                    args=(stock,)
-                )
+        for idx, stock_name in enumerate(stocks):
+            col = cols[idx % 5]
+            with col:
+                # 銘柄分析ボタン（クリックしたら個別詳細画面へ遷移）
+                if st.button(f"📝 分析 ({stock_name})", key=f"btn_{category_name}_{stock_name}"):
+                    st.session_state["selected_stock"] = stock_name
+                    st.rerun()
 
 else:
-    # --- 【画面B】個別銘柄 詳細分析画面 ---
-    stock_name = st.session_state["selected_stock"]
-    st.title(f"🔍 {stock_name} の個別分析")
-
-    # サンプル分析コンテンツ
-    st.info(f"現在、**{stock_name}** のチャートおよび詳細データを表示しています。")
+    # -------------------------------------------------------------
+    # 【画面2】個別銘柄 詳細分析画面
+    # -------------------------------------------------------------
+    selected = st.session_state["selected_stock"]
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric(label="現在値", value="2,450 円", delta="+35 円 (+1.45%)")
-    with col2:
-        st.metric(label="出来高", value="1,240,000 株", delta="-5.2%")
-
-    st.write("---")
-    st.subheader("📈 テクニカル分析指標")
-    st.write("・RSI: 54.2 (中立)")
-    st.write("・移動平均線: 25日線の上で推移中")
+    st.title(f"📊 {selected} の詳細分析")
+    st.success(f"現在 **{selected}** の分析画面を表示しています。")
+    
+    # ここにチャートや詳細指標などのコンテンツが入ります
+    st.write("・株価データおよび詳細チャートを表示中...")
