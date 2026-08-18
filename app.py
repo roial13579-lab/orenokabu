@@ -161,22 +161,26 @@ data_dict = fetch_data()
 if "target_ticker" not in st.session_state:
     st.session_state.target_ticker = ""
 
-# 画面遷移と銘柄選択の処理（st.rerunを追加して確実に画面更新）
+NAV_MODES = ["📊 10大業界＆米国株トップ10", "📈 個別銘柄詳細＆深掘り分析", "🚀 テンバガー（急騰）候補"]
+if "selected_mode" not in st.session_state:
+    st.session_state.selected_mode = NAV_MODES[0]
+
 def select_ticker(ticker):
     st.session_state.target_ticker = ticker
-    st.session_state.nav_mode = "📈 個別銘柄詳細＆深掘り分析"
-    st.rerun()
+    st.session_state.selected_mode = "📈 個別銘柄詳細＆深掘り分析"
 
 def clear_ticker():
     st.session_state.target_ticker = ""
-    st.rerun()
 
 # サイドバーナビゲーション
+current_mode_idx = NAV_MODES.index(st.session_state.selected_mode) if st.session_state.selected_mode in NAV_MODES else 0
 mode = st.sidebar.radio(
     "機能選択",
-    ["📊 10大業界＆米国株トップ10", "📈 個別銘柄詳細＆深掘り分析", "🚀 テンバガー（急騰）候補"],
-    key="nav_mode"
+    options=NAV_MODES,
+    index=current_mode_idx,
+    key="nav_radio"
 )
+st.session_state.selected_mode = mode
 
 # 業界別「平均値動き額（絶対値）」の算出・ランキング化
 sector_movement = {}
@@ -302,7 +306,6 @@ elif mode == "📈 個別銘柄詳細＆深掘り分析":
     
     if selected_from_box != st.session_state.target_ticker:
         st.session_state.target_ticker = selected_from_box
-        st.rerun()
 
     selected_ticker = st.session_state.target_ticker
 
